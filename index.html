@@ -1175,11 +1175,12 @@
        Networking Bridge — proxy HTTP from VM via browser fetch()
        ═══════════════════════════════════════════════════ */
     function getProviderConfig() {
-        var url = localStorage.getItem('karkhana_api_url') || 'https://api.anthropic.com';
-        var format = localStorage.getItem('karkhana_api_format') || 'anthropic';
+        var url = localStorage.getItem('karkhana_api_url') || 'https://openrouter.ai/api/v1';
+        var format = localStorage.getItem('karkhana_api_format') || 'openai';
         var model = localStorage.getItem('karkhana_api_model') || 'claude-sonnet-4-20250514';
-        var provider = format; /* bridge uses this for routing */
-        return { provider: provider, model: model, url: url, format: format };
+        var key = localStorage.getItem('karkhana_api_key') || '';
+        var provider = format;
+        return { provider: provider, model: model, url: url, format: format, key: key, path: '/chat/completions' };
     }
 
     function getApiKey() {
@@ -1330,6 +1331,8 @@
         executeHttpProxy: async function(req) {
             var url = req.url;
             if (!url) return { status: 400, body: '', error: 'No URL' };
+            /* Upgrade http:// to https:// for known API hosts */
+            url = url.replace(/^http:\/\/(api\.|openrouter\.|generativelanguage\.)/, 'https://$1');
 
             try {
                 var opts = { method: req.method || 'GET' };
@@ -1943,33 +1946,45 @@
 'def get_provider():',
 '    if os.path.exists(PROVIDER_CONFIG):',
 '        with open(PROVIDER_CONFIG) as f: return json.load(f)',
-'    return {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}',
+'    return {"provider": "openai", "model": "claude-sonnet-4-20250514", "url": "https://openrouter.ai/api/v1", "path": "/chat/completions", "key": ""}',
 '',
 'def llm_call(messages):',
+'    import urllib.request, urllib.error',
 '    memory = load_memory()',
 '    skills = skills_list()',
 '    system = SYSTEM_PROMPT.format(memory=memory or "Nothing saved yet.", skills_index=skills)',
 '    cfg = get_provider()',
-'    req = {"provider": cfg["provider"], "path": "/v1/messages", "method": "POST",',
-'           "headers": {"content-type": "application/json"},',
-'           "body": json.dumps({"model": cfg["model"], "max_tokens": 4096,',
-'                               "system": system, "tools": TOOLS, "messages": messages})}',
-'    # Clean up old files',
-'    for f in [BRIDGE_REQ, BRIDGE_RES]:',
-'        try: os.remove(f)',
-'        except: pass',
-'    with open(BRIDGE_REQ, "w") as f: json.dump(req, f)',
-'    # Wait for response',
-'    for _ in range(300):  # 60s timeout',
-'        time.sleep(0.2)',
-'        if os.path.exists(BRIDGE_RES):',
-'            try:',
-'                with open(BRIDGE_RES) as f: res = json.load(f)',
-'                os.remove(BRIDGE_RES)',
-'                os.remove(BRIDGE_REQ)',
-'                return res.get("body", res)',
-'            except: pass',
-'    return {"error": "Bridge timeout"}',
+'    # Use http:// for proxy routing — kproxy upgrades to https via browser fetch',
+'    base = cfg.get("url", "https://openrouter.ai/api/v1")',
+'    url = base.replace("https://", "http://") + cfg.get("path", "/chat/completions")',
+'    key = cfg.get("key", "")',
+'    body = json.dumps({"model": cfg["model"], "max_tokens": 4096,',
+'                       "messages": [{"role": "system", "content": system}] + messages})',
+'    headers = {"Content-Type": "application/json"}',
+'    if key: headers["Authorization"] = "Bearer " + key',
+'    # Use kproxy if available (routes through browser fetch bridge)',
+'    proxy = urllib.request.ProxyHandler({"http": "http://127.0.0.1:8888", "https": "http://127.0.0.1:8888"})',
+'    opener = urllib.request.build_opener(proxy)',
+'    try:',
+'        req = urllib.request.Request(url, data=body.encode(), headers=headers)',
+'        with opener.open(req, timeout=120) as resp:',
+'            data = json.loads(resp.read().decode())',
+'            # Normalize OpenAI format to our internal format',
+'            choices = data.get("choices", [{}])',
+'            msg = choices[0].get("message", {}) if choices else {}',
+'            content = msg.get("content", "")',
+'            tool_calls = msg.get("tool_calls", [])',
+'            blocks = []',
+'            if content: blocks.append({"type": "text", "text": content})',
+'            for tc in tool_calls:',
+'                fn = tc.get("function", {})',
+'                blocks.append({"type": "tool_use", "id": tc.get("id", ""), "name": fn.get("name", ""), "input": json.loads(fn.get("arguments", "{}")) })',
+'            stop = "tool_use" if tool_calls else "end_turn"',
+'            return {"content": blocks, "stop_reason": stop}',
+'    except urllib.error.HTTPError as e:',
+'        return {"error": "HTTP %d: %s" % (e.code, e.read().decode()[:200])}',
+'    except Exception as e:',
+'        return {"error": str(e)}',
 '',
 'def execute_tool(con, name, inp):',
 '    try:',
