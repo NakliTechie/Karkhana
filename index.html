@@ -171,6 +171,13 @@
     }
     #k-workspace-btn:hover { border-color: #ff6b35; color: #ff6b35; }
     #k-workspace-btn.active { border-color: #2a6; color: #2a6; }
+    .vm-btn {
+        background: none; border: none; color: #555;
+        font-size: 0.75rem; cursor: pointer; padding: 2px 5px;
+        border-radius: 2px; transition: color 0.15s;
+    }
+    .vm-btn:hover { color: #ff6b35; }
+    .vm-btn.active { color: #fa0; }
     #k-settings-btn {
         background: none; border: none; color: #666;
         font-size: 0.85rem; cursor: pointer; margin-left: auto;
@@ -746,6 +753,12 @@
     <button id="k-sidebar-toggle" style="background:none;border:none;color:#666;font-size:0.85rem;cursor:pointer;padding:3px 6px;margin-right:6px;" title="File browser">&#9776;</button>
     <button id="k-workspace-btn">Open Workspace</button>
     <div id="k-bridge-dot" title="Bridge idle"></div>
+    <div style="display:flex;gap:2px;margin-left:8px;border-left:1px solid #1a1a24;padding-left:8px;" id="k-vm-controls">
+        <button class="vm-btn" id="k-vm-pause" title="Pause/Resume VM">&#9208;</button>
+        <button class="vm-btn" id="k-vm-save" title="Save state">&#128190;</button>
+        <button class="vm-btn" id="k-vm-load" title="Load state">&#128194;</button>
+        <button class="vm-btn" id="k-vm-reset" title="Reset VM">&#8635;</button>
+    </div>
     <button id="k-help-btn" style="background:none;border:none;color:#555;font-size:0.85rem;cursor:pointer;padding:3px 8px;margin-right:2px;" title="Help (F1)">?</button>
     <button id="k-settings-btn">&#9881; Settings</button>
 </div>
@@ -2493,6 +2506,53 @@
 
         /* Help button */
         document.getElementById('k-help-btn').onclick = function() { showDocs(); };
+
+        /* VM control buttons */
+        if (emu) {
+            var pauseBtn = document.getElementById('k-vm-pause');
+            var paused = false;
+            pauseBtn.onclick = function() {
+                if (paused) { emu.run(); paused = false; pauseBtn.classList.remove('active'); toast('VM resumed'); }
+                else { emu.stop(); paused = true; pauseBtn.classList.add('active'); toast('VM paused', 'error'); }
+            };
+
+            document.getElementById('k-vm-save').onclick = function() {
+                toast('Saving state\u2026');
+                /* v86 save_state is async with callback in copy.sh build */
+                try {
+                    /* Find the save_state method — minified name */
+                    var methods = Object.getOwnPropertyNames(Object.getPrototypeOf(emu));
+                    var saveFn = methods.find(function(m) { return m.length <= 3 && typeof emu[m] === 'function' && m !== 'run' && m !== 'stop'; });
+                    /* Use the Yf-style approach — save to IndexedDB */
+                    var stateKey = 'karkhana_vm_state';
+                    emu.save_state(function(err, state) {
+                        if (err) { toast('Save failed: ' + err, 'error'); return; }
+                        idbSet(stateKey, state).then(function() {
+                            toast('State saved (' + Math.round(state.byteLength / 1024) + ' KB)', 'success');
+                        });
+                    });
+                } catch (e) {
+                    toast('Save not available: ' + e.message, 'error');
+                }
+            };
+
+            document.getElementById('k-vm-load').onclick = function() {
+                idbGet('karkhana_vm_state').then(function(state) {
+                    if (!state) { toast('No saved state', 'error'); return; }
+                    try {
+                        emu.restore_state(state);
+                        toast('State restored', 'success');
+                    } catch (e) {
+                        toast('Restore failed: ' + e.message, 'error');
+                    }
+                });
+            };
+
+            document.getElementById('k-vm-reset').onclick = function() {
+                emu.restart();
+                toast('VM restarting\u2026');
+            };
+        }
 
         /* Init embed bridge + MCP */
         initEmbedBridge();

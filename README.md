@@ -2,7 +2,7 @@
 
 A real Linux VM in your browser tab. Shell, filesystem, coding agent — no server, no install, nothing leaves your device.
 
-**[Launch Karkhana](https://karkhana.naklitechie.com)** | **[Documentation](https://karkhana.naklitechie.com)** (click ? in-app)
+**[Launch Karkhana](https://naklitechie.github.io/Karkhana/)** | **[Documentation](https://naklitechie.github.io/Karkhana/)** (click ? in-app)
 
 ---
 
@@ -40,12 +40,19 @@ The name means "workshop" in Hindi/Urdu.
 
 WebContainers run Node.js in the browser via WebAssembly. Karkhana runs *real Linux* — a full kernel with real syscalls, real processes, real `crontab`. The trade-off is speed (v86 emulation is ~30 MIPS vs native), but you get an environment where any Linux tool can run, not just Node.
 
-## What we borrowed
+## What we borrowed and extended
 
-- **[v86](https://github.com/copy/v86)** — the x86 emulator. We use the copy.sh build (`v86_all.js` + `v86.wasm`) because the npm/GitHub release builds have a bzImage boot bug. The emulator instance is exposed via a 1-line patch.
-- **[xterm.js](https://xtermjs.org)** — terminal rendering. Used by v86 for the serial console; we style it with Karkhana's dark theme.
-- **[Transformers.js](https://huggingface.co/docs/transformers.js)** v4 — in-browser model inference. The WebGPU worker pattern is adapted from [VaultMind](https://github.com/NakliTechie/VaultMind) (another NakliTechie project).
-- **Buildroot bzImage** — the stock `buildroot-bzimage68.bin` from `i.copy.sh`. 10 MB, boots in ~15 seconds.
+| Component | Source | What we extended |
+|---|---|---|
+| **[v86](https://github.com/copy/v86)** | x86 emulator + copy.sh demo build | Patched to expose emulator instance. Replaced demo UI with Karkhana shell (landing page, boot overlay, settings panel). Added 9P↔FSA filesystem bridge, networking bridge, MCP server — none of which exist in the v86 demo. |
+| **[xterm.js](https://xtermjs.org)** | Terminal rendering | Themed to match Karkhana dark scheme. Scrollbar styled. Wired to v86 serial console (v86 demo uses its own xterm instance; we hide it and relay output). |
+| **[Transformers.js](https://huggingface.co/docs/transformers.js)** v4 | In-browser ML inference | WebGPU worker pattern adapted from [VaultMind](https://github.com/NakliTechie/VaultMind) (another NakliTechie project). Added bridge routing so in-browser models serve agent requests without an API key. |
+| **Buildroot bzImage** | Stock image from `i.copy.sh` | No modifications to the image itself. Agent harness, workspace symlink, and provider config injected at boot time via 9P + serial commands. |
+| **v86 network relay** | `wss://relay.widgetry.org/` (by [nickvdp](https://github.com/nickvdp)) | Used for optional TCP/IP networking inside the VM (package installation, curl). Karkhana adds a toggle in settings. |
+
+### What we studied but took a different direction from
+
+- **[Puter](https://github.com/HeyPuter/puter)** — studied their window management, context menus, notification system, and AI SDK patterns. Adopted context menus and toast notifications for the file browser. Did not adopt: desktop metaphor, cloud backend, user accounts, app windowing system. The core difference is Puter is a cloud OS; Karkhana is a local Linux workshop.
 
 ## Architecture
 
@@ -64,7 +71,7 @@ Browser tab
 
 ## Quick start
 
-1. Open [karkhana.naklitechie.com](https://karkhana.naklitechie.com) (or serve locally: `python3 -m http.server 8766`)
+1. Open [naklitechie.github.io/Karkhana](https://naklitechie.github.io/Karkhana/) (or serve locally: `python3 -m http.server 8766`)
 2. Click **Launch Karkhana** — Linux boots in ~15 seconds
 3. Type shell commands at the `~%` prompt
 4. Click **Open Workspace** to connect a host folder
