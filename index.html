@@ -1215,6 +1215,7 @@
             this.pollTimer = setInterval(function() {
                 if (!self.polling) return;
                 self.checkRequest();
+                self.checkHttpProxy();
             }, 200);
 
             this.setStatus('Listening');
@@ -1295,6 +1296,61 @@
                 return { status: res.status, body: body };
             } catch (e) {
                 return { status: 0, body: { error: e.message } };
+            }
+        },
+
+        /* ── General HTTP proxy (kfetch/kcurl from inside VM) ── */
+        httpBusy: false,
+        checkHttpProxy: async function() {
+            if (this.httpBusy) return;
+            try {
+                var reqData = await this.emu.Yf('/tmp/kfetch_req.json').catch(function() { return null; });
+                if (!reqData || reqData.length === 0) return;
+
+                var resData = await this.emu.Yf('/tmp/kfetch_res.json').catch(function() { return null; });
+                if (resData && resData.length > 0) return;
+
+                this.httpBusy = true;
+                this.setStatus('HTTP proxy\u2026');
+
+                var reqText = new TextDecoder().decode(reqData);
+                var req = JSON.parse(reqText);
+                var response = await this.executeHttpProxy(req);
+
+                var resBytes = new TextEncoder().encode(JSON.stringify(response));
+                await this.emu.Aj('/tmp/kfetch_res.json', resBytes);
+
+                this.setStatus('Listening');
+                this.httpBusy = false;
+            } catch (e) {
+                this.httpBusy = false;
+            }
+        },
+
+        executeHttpProxy: async function(req) {
+            var url = req.url;
+            if (!url) return { status: 400, body: '', error: 'No URL' };
+
+            try {
+                var opts = { method: req.method || 'GET' };
+                if (req.headers) opts.headers = req.headers;
+                if (req.body) opts.body = req.body;
+
+                var res = await fetch(url, opts);
+                var contentType = res.headers.get('content-type') || '';
+                var body;
+                if (contentType.includes('json')) {
+                    body = JSON.stringify(await res.json());
+                } else {
+                    body = await res.text();
+                }
+
+                var resHeaders = {};
+                res.headers.forEach(function(v, k) { resHeaders[k] = v; });
+
+                return { status: res.status, headers: resHeaders, body: body };
+            } catch (e) {
+                return { status: 0, error: e.message, body: '' };
             }
         },
 
@@ -1603,6 +1659,64 @@
     /* ═══════════════════════════════════════════════════
        Agent harness (Python script, injected into VM at boot)
        ═══════════════════════════════════════════════════ */
+    /* Shell wrappers for HTTP proxy bridge */
+    var KFETCH_SCRIPT = [
+'#!/bin/sh',
+'# kfetch — HTTP via browser bridge. Usage: kfetch URL [METHOD]',
+'URL="$1"; METHOD="${2:-GET}"; shift 2 2>/dev/null',
+'BODY=""',
+'if [ "$METHOD" = "POST" ] || [ "$METHOD" = "PUT" ]; then',
+'  BODY="$(cat)"',
+'fi',
+'# Write request',
+'rm -f /tmp/kfetch_res.json',
+'if [ -n "$BODY" ]; then',
+'  printf \'{"url":"%s","method":"%s","body":"%s"}\' "$URL" "$METHOD" "$(echo "$BODY" | sed \'s/"/\\\\"/g\' | tr -d \'\\n\')" > /tmp/kfetch_req.json',
+'else',
+'  printf \'{"url":"%s","method":"%s"}\' "$URL" "$METHOD" > /tmp/kfetch_req.json',
+'fi',
+'# Poll for response (timeout 30s)',
+'i=0; while [ $i -lt 150 ]; do',
+'  if [ -s /tmp/kfetch_res.json ]; then',
+'    python3 -c "',
+'import json,sys',
+'r=json.load(open(\'/tmp/kfetch_res.json\'))',
+'if r.get(\'error\'): print(\'Error: \'+r[\'error\'],file=sys.stderr); sys.exit(1)',
+'print(r.get(\'body\',\'\'))',
+'" 2>&1',
+'    rm -f /tmp/kfetch_req.json /tmp/kfetch_res.json',
+'    exit 0',
+'  fi',
+'  sleep 0.2; i=$((i+1))',
+'done',
+'echo "Timeout" >&2; exit 1',
+    ].join('\n');
+
+    var KCURL_SCRIPT = [
+'#!/bin/sh',
+'# kcurl — curl replacement via browser bridge',
+'# Supports: kcurl URL, kcurl -o FILE URL, kcurl -X POST -d DATA URL',
+'OUTPUT="" METHOD="GET" DATA="" URL=""',
+'while [ $# -gt 0 ]; do',
+'  case "$1" in',
+'    -o) OUTPUT="$2"; shift 2;;',
+'    -X) METHOD="$2"; shift 2;;',
+'    -d) DATA="$2"; shift 2;;',
+'    -s|-S|-L|-f|-k) shift;;',
+'    -*) shift;;',
+'    *) URL="$1"; shift;;',
+'  esac',
+'done',
+'if [ -z "$URL" ]; then echo "Usage: kcurl URL" >&2; exit 1; fi',
+'if [ -n "$DATA" ]; then',
+'  echo "$DATA" | kfetch "$URL" "$METHOD"',
+'elif [ "$METHOD" != "GET" ]; then',
+'  echo "" | kfetch "$URL" "$METHOD"',
+'else',
+'  kfetch "$URL" "$METHOD"',
+'fi | if [ -n "$OUTPUT" ]; then cat > "$OUTPUT"; else cat; fi',
+    ].join('\n');
+
     var AGENT_HARNESS = [
 '#!/usr/bin/env python3',
 'import json, os, time, sys, sqlite3, datetime',
@@ -2470,17 +2584,20 @@
         /* Create /workspace symlink + install agent harness */
         var emu = window.__karkhana_emulator;
         if (emu) {
-            /* Write agent harness to 9P, then install via serial */
-            var agentScript = AGENT_HARNESS;
-            var agentBytes = new TextEncoder().encode(agentScript);
-            emu.Aj('/usr/bin/agent', agentBytes).then(function() {
-                console.log('[Karkhana] Agent harness written to 9P');
+            /* Write agent + kfetch + kcurl to 9P, then install via serial */
+            var enc = new TextEncoder();
+            Promise.all([
+                emu.Aj('/usr/bin/agent', enc.encode(AGENT_HARNESS)),
+                emu.Aj('/usr/bin/kfetch', enc.encode(KFETCH_SCRIPT)),
+                emu.Aj('/usr/bin/kcurl', enc.encode(KCURL_SCRIPT)),
+            ]).then(function() {
+                console.log('[Karkhana] Agent + kfetch + kcurl written to 9P');
                 setTimeout(function() {
-                    sendSerial(emu, 'mkdir -p /workspace; chmod +x /usr/bin/agent 2>/dev/null\n');
-                    console.log('[Karkhana] Agent installed');
-                }, 500);
+                    sendSerial(emu, 'mkdir -p /workspace; sleep 1; chmod +x /usr/bin/agent /usr/bin/kfetch /usr/bin/kcurl 2>/dev/null; echo "[tools ready]"\n');
+                    console.log('[Karkhana] Tools installed');
+                }, 1500);
             }).catch(function(e) {
-                console.warn('[Karkhana] Agent install failed:', e);
+                console.warn('[Karkhana] Tool install failed:', e);
                 setTimeout(function() {
                     sendSerial(emu, 'mkdir -p /workspace\n');
                 }, 500);
