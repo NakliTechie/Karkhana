@@ -1458,11 +1458,12 @@
             localStorage.setItem('karkhana_api_url', urlInput.value);
             localStorage.setItem('karkhana_api_key', keyInput.value);
             localStorage.setItem('karkhana_api_model', modelInput.value);
-            /* Push config to VM */
+            /* Push config to VM via serial (Aj doesn't work after boot) */
             var emu = window.__karkhana_emulator;
             if (emu) {
                 var cfg = getProviderConfig();
-                emu.Aj('/tmp/karkhana_provider.json', new TextEncoder().encode(JSON.stringify(cfg))).catch(function(){});
+                var json = JSON.stringify(cfg).replace(/'/g, "'\\''");
+                sendSerial(emu, "echo '" + json + "' > /tmp/karkhana_provider.json\n");
             }
         }
         urlInput.onchange = saveApiConfig;
