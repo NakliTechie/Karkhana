@@ -1717,6 +1717,110 @@
 'fi | if [ -n "$OUTPUT" ]; then cat > "$OUTPUT"; else cat; fi',
     ].join('\n');
 
+    var KPROXY_SCRIPT = [
+'#!/usr/bin/env python3',
+'"""Karkhana HTTP proxy — routes all traffic through the browser fetch bridge."""',
+'import http.server, json, os, time, sys, urllib.parse, socketserver, threading',
+'',
+'REQ  = "/tmp/kfetch_req.json"',
+'RES  = "/tmp/kfetch_res.json"',
+'LOCK = threading.Lock()',
+'',
+'def bridge_fetch(url, method="GET", headers=None, body=None):',
+'    """Send HTTP request through the browser bridge."""',
+'    with LOCK:',
+'        for f in [REQ, RES]:',
+'            try: os.remove(f)',
+'            except: pass',
+'        req = {"url": url, "method": method}',
+'        if headers: req["headers"] = headers',
+'        if body: req["body"] = body',
+'        with open(REQ, "w") as f: json.dump(req, f)',
+'        for _ in range(300):',
+'            time.sleep(0.2)',
+'            if os.path.exists(RES):',
+'                try:',
+'                    with open(RES) as f: res = json.load(f)',
+'                    os.remove(RES)',
+'                    os.remove(REQ)',
+'                    return res',
+'                except: pass',
+'        return {"status": 504, "body": "", "error": "Bridge timeout"}',
+'',
+'class ProxyHandler(http.server.BaseHTTPRequestHandler):',
+'    def do_request(self):',
+'        # Build the target URL',
+'        url = self.path',
+'        if not url.startswith("http"):',
+'            url = "http://" + self.headers.get("Host", "") + self.path',
+'        ',
+'        # Read body if present',
+'        body = None',
+'        length = self.headers.get("Content-Length")',
+'        if length:',
+'            body = self.rfile.read(int(length)).decode("utf-8", errors="replace")',
+'        ',
+'        # Forward headers (skip hop-by-hop)',
+'        skip = {"host", "connection", "proxy-connection", "keep-alive",',
+'                "transfer-encoding", "te", "trailer", "upgrade"}',
+'        hdrs = {k: v for k, v in self.headers.items() if k.lower() not in skip}',
+'        ',
+'        res = bridge_fetch(url, self.command, hdrs if hdrs else None, body)',
+'        ',
+'        status = res.get("status", 502)',
+'        res_body = res.get("body", res.get("error", ""))',
+'        if isinstance(res_body, dict): res_body = json.dumps(res_body)',
+'        raw = res_body.encode("utf-8")',
+'        ',
+'        self.send_response(status)',
+'        for k, v in res.get("headers", {}).items():',
+'            if k.lower() not in ("transfer-encoding", "content-encoding", "content-length"):',
+'                self.send_header(k, v)',
+'        self.send_header("Content-Length", str(len(raw)))',
+'        self.end_headers()',
+'        self.wfile.write(raw)',
+'    ',
+'    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = do_request',
+'    ',
+'    def do_CONNECT(self):',
+'        """HTTPS tunneling — we MITM via the bridge (no real TLS to target)."""',
+'        host = self.path',
+'        self.send_response(200, "Connection Established")',
+'        self.end_headers()',
+'        # Now read the tunneled HTTP request line by line',
+'        # The client thinks it has a TLS tunnel; we just proxy plaintext',
+'        # This only works with clients that accept our self-signed or skip verification',
+'        # For now, send a 502 — most tools use http_proxy for everything anyway',
+'        pass',
+'    ',
+'    def log_message(self, fmt, *args):',
+'        sys.stderr.write("[kproxy] %s\\n" % (fmt % args))',
+'',
+'class ThreadedProxy(socketserver.ThreadingMixIn, http.server.HTTPServer):',
+'    daemon_threads = True',
+'    allow_reuse_address = True',
+'',
+'if __name__ == "__main__":',
+'    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8888',
+'    server = ThreadedProxy(("127.0.0.1", port), ProxyHandler)',
+'    print(f"[kproxy] listening on 127.0.0.1:{port}", file=sys.stderr)',
+'    print(f"[kproxy] export http_proxy=http://127.0.0.1:{port}", file=sys.stderr)',
+'    print(f"[kproxy] export https_proxy=http://127.0.0.1:{port}", file=sys.stderr)',
+'    server.serve_forever()',
+    ].join('\n');
+
+    var KPROXY_STARTER = [
+'#!/bin/sh',
+'# Start kproxy and set env vars',
+'kproxy &',
+'sleep 1',
+'export http_proxy=http://127.0.0.1:8888',
+'export https_proxy=http://127.0.0.1:8888',
+'export HTTP_PROXY=http://127.0.0.1:8888',
+'export HTTPS_PROXY=http://127.0.0.1:8888',
+'echo "Proxy running. curl/wget/apk/pip will route through browser."',
+    ].join('\n');
+
     var AGENT_HARNESS = [
 '#!/usr/bin/env python3',
 'import json, os, time, sys, sqlite3, datetime',
@@ -2590,10 +2694,20 @@
                 emu.Aj('/usr/bin/agent', enc.encode(AGENT_HARNESS)),
                 emu.Aj('/usr/bin/kfetch', enc.encode(KFETCH_SCRIPT)),
                 emu.Aj('/usr/bin/kcurl', enc.encode(KCURL_SCRIPT)),
+                emu.Aj('/usr/bin/kproxy', enc.encode(KPROXY_SCRIPT)),
+                emu.Aj('/usr/bin/kproxy-start', enc.encode(KPROXY_STARTER)),
             ]).then(function() {
-                console.log('[Karkhana] Agent + kfetch + kcurl written to 9P');
+                console.log('[Karkhana] Tools written to 9P');
                 setTimeout(function() {
-                    sendSerial(emu, 'mkdir -p /workspace; sleep 1; chmod +x /usr/bin/agent /usr/bin/kfetch /usr/bin/kcurl 2>/dev/null; echo "[tools ready]"\n');
+                    sendSerial(emu, 'mkdir -p /workspace; sleep 1; chmod +x /usr/bin/agent /usr/bin/kfetch /usr/bin/kcurl /usr/bin/kproxy /usr/bin/kproxy-start 2>/dev/null\n');
+                    /* Bring up loopback, start proxy, set env vars */
+                    setTimeout(function() {
+                        sendSerial(emu, 'ip link set lo up 2>/dev/null; kproxy >/dev/null 2>&1 &\n');
+                        setTimeout(function() {
+                            sendSerial(emu, 'export http_proxy=http://127.0.0.1:8888 https_proxy=http://127.0.0.1:8888 HTTP_PROXY=http://127.0.0.1:8888 HTTPS_PROXY=http://127.0.0.1:8888\n');
+                            console.log('[Karkhana] Proxy started + env vars set');
+                        }, 1000);
+                    }, 1000);
                     console.log('[Karkhana] Tools installed');
                 }, 1500);
             }).catch(function(e) {

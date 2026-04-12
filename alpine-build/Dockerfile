@@ -24,6 +24,12 @@ RUN printf '#!/bin/sh\nhwclock -s\nip link set eth0 up 2>/dev/null\nudhcpc -i et
 # Welcome message
 RUN echo -e '\n\033[38;5;208mKarkhana / कारख़ाना\033[0m\nType "agent" to start the coding agent.\nType "/root/networking.sh" to enable internet.\n' > /etc/motd
 
+# Loopback interface (needed for kproxy)
+RUN printf 'auto lo\niface lo inet loopback\n' > /etc/network/interfaces
+
+# Proxy env vars (kproxy started at boot by Karkhana JS)
+RUN printf 'export http_proxy=http://127.0.0.1:8888\nexport https_proxy=http://127.0.0.1:8888\nexport HTTP_PROXY=http://127.0.0.1:8888\nexport HTTPS_PROXY=http://127.0.0.1:8888\n' >> /etc/profile
+
 # OpenRC services
 RUN for i in devfs dmesg mdev hwdrivers; do rc-update add $i sysinit; done
 RUN for i in hwclock modules sysctl hostname syslog bootmisc; do rc-update add $i boot; done
