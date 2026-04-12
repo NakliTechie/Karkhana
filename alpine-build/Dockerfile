@@ -19,7 +19,7 @@ RUN echo "root:" | chpasswd
 RUN setup-hostname karkhana
 
 # Networking script (run after boot to get internet via v86 relay)
-RUN echo -e '#!/bin/sh\nrmmod ne2k-pci 2>/dev/null; modprobe ne2k-pci\nhwclock -s\nsetup-interfaces -a -r' > /root/networking.sh && chmod +x /root/networking.sh
+RUN printf '#!/bin/sh\nhwclock -s\nip link set eth0 up 2>/dev/null\nudhcpc -i eth0 -q\n' > /root/networking.sh && chmod +x /root/networking.sh
 
 # Welcome message
 RUN echo -e '\n\033[38;5;208mKarkhana / कारख़ाना\033[0m\nType "agent" to start the coding agent.\nType "/root/networking.sh" to enable internet.\n' > /etc/motd
