@@ -791,7 +791,10 @@
             <label>Model</label>
             <input type="text" id="k-api-model" placeholder="claude-sonnet-4-20250514" value="claude-sonnet-4-20250514">
             <button id="k-discover-models" style="margin-top:4px;padding:3px 10px;font-size:0.7rem;background:none;border:1px solid #333;color:#888;border-radius:3px;cursor:pointer;">Discover Models</button>
-            <div id="k-model-list" style="display:none;max-height:120px;overflow-y:auto;margin-top:4px;border:1px solid #333;border-radius:3px;background:#1a1a28;"></div>
+            <div id="k-model-list" style="display:none;margin-top:4px;border:1px solid #333;border-radius:3px;background:#1a1a28;">
+                <input id="k-model-search" type="text" placeholder="Search models..." style="width:100%;padding:5px 8px;background:#12121c;border:none;border-bottom:1px solid #333;color:#ccc;font-size:0.72rem;box-sizing:border-box;">
+                <div id="k-model-items" style="max-height:150px;overflow-y:auto;"></div>
+            </div>
             <div class="hint">Keys stored in your browser only. Never sent to any server.</div>
             <div class="hint" id="k-api-format-hint"></div>
         </div>
@@ -1532,19 +1535,31 @@
 
             formatHint.textContent = models.length + ' models found';
             modelList.style.display = 'block';
-            modelList.innerHTML = models.map(function(m) {
-                return '<div style="padding:4px 8px;cursor:pointer;font-size:0.75rem;color:#aaa;border-bottom:1px solid #222;" data-model="' + m + '">' + m + '</div>';
-            }).join('');
+            var modelItems = document.getElementById('k-model-items');
+            var modelSearch = document.getElementById('k-model-search');
 
-            modelList.querySelectorAll('div').forEach(function(el) {
-                el.onmouseenter = function() { el.style.color = '#ff6b35'; };
-                el.onmouseleave = function() { el.style.color = '#aaa'; };
-                el.onclick = function() {
-                    modelInput.value = el.dataset.model;
-                    modelList.style.display = 'none';
-                    saveApiConfig();
-                };
-            });
+            function renderModels(filter) {
+                var filtered = filter ? models.filter(function(m) { return m.toLowerCase().includes(filter.toLowerCase()); }) : models;
+                modelItems.innerHTML = filtered.map(function(m) {
+                    return '<div style="padding:4px 8px;cursor:pointer;font-size:0.72rem;color:#aaa;border-bottom:1px solid #1a1a24;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" data-model="' + m + '">' + m + '</div>';
+                }).join('');
+                modelItems.querySelectorAll('div').forEach(function(el) {
+                    el.onmouseenter = function() { el.style.color = '#ff6b35'; el.style.background = '#14141e'; };
+                    el.onmouseleave = function() { el.style.color = '#aaa'; el.style.background = ''; };
+                    el.onclick = function() {
+                        modelInput.value = el.dataset.model;
+                        modelList.style.display = 'none';
+                        modelSearch.value = '';
+                        saveApiConfig();
+                    };
+                });
+                formatHint.textContent = filtered.length + ' of ' + models.length + ' models';
+            }
+
+            renderModels('');
+            modelSearch.value = '';
+            modelSearch.focus();
+            modelSearch.oninput = function() { renderModels(modelSearch.value); };
         };
 
         /* ── Local model (Transformers.js + WebGPU) ── */
