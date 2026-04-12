@@ -873,7 +873,7 @@
         /* Show landing page */
         document.getElementById('k-landing').style.display = 'flex';
         document.getElementById('k-launch').onclick = function() {
-            location.href = location.pathname + '?profile=buildroot6';
+            location.href = location.pathname + '?profile=alpine';
         };
         document.getElementById('k-docs-link').onclick = function() {
             document.getElementById('k-landing').style.display = 'none';
@@ -1209,7 +1209,7 @@
             /* Write provider config into VM */
             var cfg = getProviderConfig();
             var cfgBytes = new TextEncoder().encode(JSON.stringify(cfg));
-            emu.Aj('/karkhana_provider.json', cfgBytes).catch(function() {});
+            emu.Aj('/tmp/karkhana_provider.json', cfgBytes).catch(function() {});
 
             /* Poll for requests from the VM */
             this.pollTimer = setInterval(function() {
@@ -1236,10 +1236,10 @@
             if (this.busy) return;
             try {
                 /* Only process if req exists and res does NOT */
-                var reqData = await this.emu.Yf('/karkhana_req.json').catch(function() { return null; });
+                var reqData = await this.emu.Yf('/tmp/karkhana_req.json').catch(function() { return null; });
                 if (!reqData || reqData.length === 0) return;
 
-                var resData = await this.emu.Yf('/karkhana_res.json').catch(function() { return null; });
+                var resData = await this.emu.Yf('/tmp/karkhana_res.json').catch(function() { return null; });
                 if (resData && resData.length > 0) return; /* response pending — agent hasn't consumed it */
 
                 this.busy = true;
@@ -1251,7 +1251,7 @@
                 var response = await this.executeRequest(req);
 
                 var resBytes = new TextEncoder().encode(JSON.stringify(response));
-                await this.emu.Aj('/karkhana_res.json', resBytes);
+                await this.emu.Aj('/tmp/karkhana_res.json', resBytes);
 
                 this.setStatus('Listening');
                 if (this.dot) this.dot.classList.remove('busy');
@@ -1400,7 +1400,7 @@
             var emu = window.__karkhana_emulator;
             if (emu) {
                 var cfg = getProviderConfig();
-                emu.Aj('/karkhana_provider.json', new TextEncoder().encode(JSON.stringify(cfg))).catch(function(){});
+                emu.Aj('/tmp/karkhana_provider.json', new TextEncoder().encode(JSON.stringify(cfg))).catch(function(){});
             }
         }
         urlInput.onchange = saveApiConfig;
@@ -1607,9 +1607,9 @@
 '#!/usr/bin/env python3',
 'import json, os, time, sys, sqlite3, datetime',
 '',
-'BRIDGE_REQ      = "/mnt/karkhana_req.json"',
-'BRIDGE_RES      = "/mnt/karkhana_res.json"',
-'PROVIDER_CONFIG = "/mnt/karkhana_provider.json"',
+'BRIDGE_REQ      = "/tmp/karkhana_req.json"',
+'BRIDGE_RES      = "/tmp/karkhana_res.json"',
+'PROVIDER_CONFIG = "/tmp/karkhana_provider.json"',
 'KARKHANA_DIR    = "/workspace/.karkhana"',
 'SKILLS_DIR      = KARKHANA_DIR + "/skills"',
 'MEMORY_FILE     = KARKHANA_DIR + "/MEMORY.md"',
@@ -2303,7 +2303,7 @@
                     if (key) localStorage.setItem('karkhana_api_key', key);
                     if (model) localStorage.setItem('karkhana_api_model', model);
                     var cfg = getProviderConfig();
-                    emu.Aj('/karkhana_provider.json', enc.encode(JSON.stringify(cfg))).catch(function(){});
+                    emu.Aj('/tmp/karkhana_provider.json', enc.encode(JSON.stringify(cfg))).catch(function(){});
                 },
                 getProvider: function() { return getProviderConfig(); },
             }),
@@ -2473,16 +2473,16 @@
             /* Write agent harness to 9P, then install via serial */
             var agentScript = AGENT_HARNESS;
             var agentBytes = new TextEncoder().encode(agentScript);
-            emu.Aj('/agent', agentBytes).then(function() {
+            emu.Aj('/usr/bin/agent', agentBytes).then(function() {
                 console.log('[Karkhana] Agent harness written to 9P');
                 setTimeout(function() {
-                    sendSerial(emu, 'ln -sf /mnt /workspace 2>/dev/null; cp /mnt/agent /usr/bin/agent; chmod +x /usr/bin/agent\n');
+                    sendSerial(emu, 'mkdir -p /workspace; chmod +x /usr/bin/agent 2>/dev/null\n');
                     console.log('[Karkhana] Agent installed');
                 }, 500);
             }).catch(function(e) {
                 console.warn('[Karkhana] Agent install failed:', e);
                 setTimeout(function() {
-                    sendSerial(emu, 'ln -sf /mnt /workspace 2>/dev/null\n');
+                    sendSerial(emu, 'mkdir -p /workspace\n');
                 }, 500);
             });
         }

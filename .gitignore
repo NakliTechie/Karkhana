@@ -1,4 +1,5 @@
 *
+!.gitattributes
 !index.html
 !v86.css
 !mcp-sw.js
@@ -19,3 +20,13 @@ bios/*
 !images/
 images/*
 !images/buildroot-bzimage68.bin
+!images/alpine-vmlinuz
+!images/alpine-initramfs
+!images/alpine-fs.json
+!images/alpine-rootfs-flat/
+images/alpine-rootfs-flat/*
+!images/alpine-rootfs-flat/*.bin.zst
+!alpine-build/
+alpine-build/*
+!alpine-build/Dockerfile
+!alpine-build/build.sh

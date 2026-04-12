@@ -1,0 +1,4 @@
+images/alpine-rootfs-flat/*.bin.zst filter=lfs diff=lfs merge=lfs -text
+images/alpine-vmlinuz filter=lfs diff=lfs merge=lfs -text
+images/alpine-initramfs filter=lfs diff=lfs merge=lfs -text
+images/alpine-fs.json filter=lfs diff=lfs merge=lfs -text
