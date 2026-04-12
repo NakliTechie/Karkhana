@@ -1,0 +1,2551 @@
+<!doctype html>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+
+<title>Karkhana / कारख़ाना</title>
+<meta name="viewport" content="width=device-width,minimum-scale=1.0,maximum-scale=1.0,user-scalable=no,interactive-widget=resizes-content">
+<meta name="description" content="A real Linux VM in your browser tab">
+
+<script src="build/v86_patched.js"></script>
+<link rel="stylesheet" href="v86.css">
+
+<!-- Karkhana overrides -->
+<style>
+    html, body { background: #0a0a0f !important; margin: 0; overflow: hidden; height: 100%; }
+
+    /* Hide ALL demo UI */
+    #boot_options, #oses, #filter, .version-links,
+    [id^="start_"], .toolbar, #runtime_options,
+    #runtime_infos, #filesystem_panel, .links,
+    hr, #screen_container, .scale, input[id$="_image"],
+    #networking_type, #networking_url, #bios, #vga_bios,
+    label[for], select { display: none !important; }
+
+    /* ── Unified scrollbar styling ── */
+    * { scrollbar-width: thin; scrollbar-color: #1e1e2e transparent; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #1e1e2e; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #2a2a3a; }
+
+    /* Serial terminal fills the page — shifts when panels open */
+    #terminal {
+        position: fixed !important; top: 0 !important; right: 0 !important;
+        bottom: 32px !important; left: 0 !important;
+        background: #0c0c14 !important;
+        padding: 4px !important;
+        transition: left 0.2s ease, right 0.25s ease !important;
+    }
+    body.sidebar-open #terminal { left: 220px !important; }
+    body.settings-open #terminal { right: 320px !important; }
+
+    /* File browser sidebar */
+    #k-sidebar {
+        position: fixed; top: 0; left: -220px; width: 220px;
+        height: calc(100vh - 32px); z-index: 99998;
+        background: #0c0c14; border-right: 1px solid #1a1a24;
+        font-family: 'Inter', system-ui, sans-serif;
+        transition: left 0.2s ease; overflow: hidden;
+        display: flex; flex-direction: column;
+    }
+    body.sidebar-open #k-sidebar { left: 0; }
+    #k-sidebar-header {
+        padding: 10px 12px 8px; border-bottom: 1px solid #1a1a24;
+        display: flex; align-items: center; justify-content: space-between;
+    }
+    #k-sidebar-header span { font-size: 0.75rem; color: #888; letter-spacing: 0.03em; }
+    #k-sidebar-header button {
+        background: none; border: none; color: #555; cursor: pointer;
+        font-size: 0.85rem; padding: 2px 4px;
+    }
+    #k-sidebar-header button:hover { color: #ff6b35; }
+    #k-file-tree { flex: 1; overflow-y: auto; padding: 6px 0; }
+    .ftree-item {
+        display: flex; align-items: center; gap: 4px;
+        padding: 3px 12px; cursor: pointer; font-size: 0.72rem;
+        color: #888; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; transition: background 0.1s;
+    }
+    .ftree-item:hover { background: #14141e; color: #ccc; }
+    .ftree-item.dir { color: #58a6ff; }
+    .ftree-item .icon { width: 14px; text-align: center; flex-shrink: 0; font-size: 0.65rem; }
+    #k-file-preview {
+        border-top: 1px solid #1a1a24; max-height: 200px;
+        overflow-y: auto; padding: 8px; font-size: 0.7rem;
+        color: #666; font-family: monospace; white-space: pre-wrap;
+        word-break: break-all; display: none;
+    }
+    #terminal .xterm { background: transparent !important; }
+    #terminal .xterm-viewport { background: #0c0c14 !important; }
+
+    /* Context menu */
+    #k-ctx-menu {
+        position: fixed; z-index: 200000; display: none;
+        background: #14141e; border: 1px solid #2a2a3a;
+        border-radius: 4px; padding: 4px 0; min-width: 140px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        font-family: 'Inter', system-ui, sans-serif;
+    }
+    #k-ctx-menu .ctx-item {
+        padding: 6px 14px; font-size: 0.73rem; color: #bbb;
+        cursor: pointer; display: flex; align-items: center; gap: 8px;
+    }
+    #k-ctx-menu .ctx-item:hover { background: #1e1e2e; color: #fff; }
+    #k-ctx-menu .ctx-item.danger:hover { background: #2a1515; color: #f66; }
+    #k-ctx-menu .ctx-sep { height: 1px; background: #1a1a24; margin: 3px 0; }
+
+    /* Toast notifications */
+    #k-toasts {
+        position: fixed; bottom: 44px; left: 50%;
+        transform: translateX(-50%); z-index: 200000;
+        display: flex; flex-direction: column-reverse; gap: 6px;
+        align-items: center; pointer-events: none;
+    }
+    .k-toast {
+        background: #14141e; border: 1px solid #2a2a3a;
+        padding: 7px 18px; border-radius: 20px;
+        font-size: 0.78rem; color: #ccc;
+        font-family: 'Inter', system-ui, sans-serif;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+        animation: kToastIn 0.2s ease-out;
+        pointer-events: auto;
+    }
+    .k-toast.success { border-color: #2a6; color: #5d8; }
+    .k-toast.error { border-color: #a33; color: #f88; }
+    @keyframes kToastIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Boot overlay */
+    #karkhana-boot {
+        position: fixed; inset: 0; display: flex;
+        align-items: center; justify-content: center;
+        z-index: 999; background: #0a0a0f;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        color: #e0e0e0; transition: opacity 0.5s;
+    }
+    #karkhana-boot.hidden { opacity: 0; pointer-events: none; }
+    #karkhana-boot .inner { text-align: center; }
+    #karkhana-boot h1 {
+        font-size: 3rem; font-weight: 300;
+        letter-spacing: 0.06em; color: #fff;
+        animation: kFadeUp 0.6s ease-out;
+    }
+    #karkhana-boot .hindi {
+        font-size: 1.15rem; color: #555;
+        margin-top: 2px; letter-spacing: 0.02em;
+        animation: kFadeUp 0.6s ease-out 0.1s both;
+    }
+    #karkhana-boot .status {
+        margin-top: 36px; font-size: 0.85rem;
+        color: #555; letter-spacing: 0.02em;
+    }
+    #karkhana-boot .bar-wrap {
+        width: 180px; height: 2px;
+        background: #1a1a24; border-radius: 1px;
+        margin: 12px auto 0; overflow: hidden;
+    }
+    #karkhana-boot .bar {
+        width: 30%; height: 100%;
+        background: #ff6b35; border-radius: 1px;
+        transition: width 0.3s ease;
+    }
+    @keyframes kFadeUp {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Workspace bar + button */
+    #k-workspace-bar {
+        position: fixed; bottom: 0; left: 0; right: 0;
+        z-index: 99999; height: 32px;
+        background: #0c0c14; border-top: 1px solid #1a1a24;
+        display: flex; align-items: center; padding: 0 12px;
+        font-family: 'Inter', system-ui, sans-serif;
+    }
+    #k-workspace-btn {
+        background: none; border: 1px solid #444;
+        color: #aaa; font-size: 0.75rem; cursor: pointer;
+        padding: 3px 14px; border-radius: 3px;
+        transition: all 0.2s;
+    }
+    #k-workspace-btn:hover { border-color: #ff6b35; color: #ff6b35; }
+    #k-workspace-btn.active { border-color: #2a6; color: #2a6; }
+    #k-settings-btn {
+        background: none; border: none; color: #666;
+        font-size: 0.85rem; cursor: pointer; margin-left: auto;
+        padding: 3px 10px; transition: color 0.2s;
+    }
+    #k-settings-btn:hover { color: #ff6b35; }
+    #k-bridge-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: #333; margin-left: 8px; margin-right: 4px;
+        transition: background 0.3s;
+    }
+    #k-bridge-dot.active { background: #2a6; }
+    #k-bridge-dot.busy { background: #fa0; }
+
+    /* Settings panel */
+    #k-settings {
+        position: fixed; top: 0; right: -340px; width: 320px;
+        height: calc(100vh - 32px); z-index: 99999; background: #0c0c14;
+        border-left: 1px solid #1a1a24; padding: 20px;
+        font-family: 'Inter', system-ui, sans-serif;
+        transition: right 0.25s ease; overflow-y: auto;
+    }
+    #k-settings.open { right: 0; }
+    #k-settings h3 { font-size: 0.85rem; font-weight: 500; color: #ccc; margin: 0 0 16px; }
+    #k-settings label {
+        display: block; font-size: 0.75rem; color: #888;
+        margin: 12px 0 4px; letter-spacing: 0.02em;
+    }
+    #k-settings input[type=password], #k-settings input[type=text] {
+        width: 100%; padding: 6px 8px; background: #1a1a28;
+        border: 1px solid #333; border-radius: 3px;
+        color: #ccc; font-size: 0.8rem; font-family: monospace;
+    }
+    #k-settings input:focus { border-color: #ff6b35; outline: none; }
+    #k-settings .provider-row {
+        display: flex; gap: 6px; margin: 8px 0 16px;
+    }
+    #k-settings .provider-row button {
+        flex: 1; padding: 5px 0; background: #1a1a28;
+        border: 1px solid #333; border-radius: 3px;
+        color: #888; font-size: 0.7rem; cursor: pointer;
+        transition: all 0.15s;
+    }
+    #k-settings .provider-row button.sel {
+        border-color: #ff6b35; color: #ff6b35; background: #1f1518;
+    }
+    #k-settings .close-btn {
+        position: absolute; top: 12px; right: 14px;
+        background: none; border: none; color: #666;
+        font-size: 1.1rem; cursor: pointer;
+    }
+    #k-settings .close-btn:hover { color: #fff; }
+    #k-settings .hint { font-size: 0.65rem; color: #555; margin-top: 4px; }
+    #k-settings .k-section {
+        border-top: 1px solid #1a1a24; margin-top: 12px; padding-top: 4px;
+    }
+    #k-settings .k-section summary {
+        font-size: 0.78rem; color: #aaa; cursor: pointer;
+        padding: 6px 0; list-style: none; display: flex;
+        align-items: center; gap: 6px; user-select: none;
+    }
+    #k-settings .k-section summary::-webkit-details-marker { display: none; }
+    #k-settings .k-section summary::before {
+        content: '\25B6'; font-size: 0.55rem; color: #555;
+        transition: transform 0.15s;
+    }
+    #k-settings .k-section[open] > summary::before { transform: rotate(90deg); }
+    #k-settings .k-section summary:hover { color: #ff6b35; }
+    #k-settings .k-section > :not(summary) { padding-left: 2px; }
+
+    /* Landing page */
+    #k-landing {
+        position: fixed; inset: 0; z-index: 100000;
+        background: #0a0a0f; display: flex;
+        flex-direction: column; align-items: center;
+        justify-content: center; text-align: center;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        color: #e0e0e0;
+    }
+    #k-landing h1 {
+        font-size: 4rem; font-weight: 200;
+        letter-spacing: 0.08em; color: #fff;
+        margin-bottom: 4px;
+    }
+    #k-landing .hindi { font-size: 1.3rem; color: #555; letter-spacing: 0.03em; }
+    #k-landing .tagline {
+        margin-top: 28px; font-size: 1rem; color: #888;
+        max-width: 460px; line-height: 1.6;
+    }
+    #k-landing .features {
+        margin-top: 32px; display: flex; gap: 28px;
+        flex-wrap: wrap; justify-content: center;
+    }
+    #k-landing .feat {
+        font-size: 0.75rem; color: #666; padding: 6px 16px;
+        border: 1px solid #1a1a24; border-radius: 20px;
+    }
+    #k-landing .launch-btn {
+        margin-top: 40px; padding: 12px 48px;
+        background: transparent; border: 1px solid #ff6b35;
+        color: #ff6b35; border-radius: 4px; cursor: pointer;
+        font-size: 1rem; letter-spacing: 0.04em;
+        transition: all 0.2s; font-family: inherit;
+    }
+    #k-landing .launch-btn:hover { background: #ff6b35; color: #0a0a0f; }
+    #k-landing .docs-link {
+        margin-top: 16px; font-size: 0.75rem;
+        color: #555; cursor: pointer; text-decoration: underline;
+        text-underline-offset: 3px;
+    }
+    #k-landing .docs-link:hover { color: #888; }
+    #k-landing .credit {
+        position: absolute; bottom: 20px;
+        font-size: 0.65rem; color: #333;
+    }
+    #k-landing .credit a { color: #444; text-decoration: none; }
+    #k-landing .credit a:hover { color: #ff6b35; }
+
+    /* Mobile gate */
+    @media (max-width: 768px) {
+        #karkhana-boot .inner::after {
+            content: 'Desktop browser required';
+            display: block; margin-top: 24px;
+            color: #555; font-size: 0.9rem;
+        }
+        #k-landing .launch-btn { display: none; }
+        #k-landing .tagline::after {
+            content: 'Desktop browser required.';
+            display: block; margin-top: 16px; color: #e55; font-size: 0.85rem;
+        }
+    }
+</style>
+
+<div>
+    <div id="boot_options">
+        <div id="filter">
+            Family:
+            <label><input id=filter_linux type=checkbox> Linux</label>
+            <label><input id=filter_bsd type=checkbox> BSD</label>
+            <label title="Microsoft Windows"><input id=filter_windows type=checkbox> Windows</label>
+            <label><input id=filter_unix type=checkbox> Unix-like</label>
+            <label><input id=filter_dos type=checkbox> DOS</label>
+            <label><input id=filter_custom type=checkbox> Custom</label>
+            <!--<label><input type=checkbox> Hobby OS</label>-->
+            UI:
+            <label title="Graphical desktop"><input id=filter_graphical type=checkbox> Graphical</label>
+            <label title="Text-based or serial console only"><input id=filter_text type=checkbox> Text</label>
+            Medium:
+            <label title="Boots from floppy disk"><input id=filter_floppy type=checkbox> Floppy</label>
+            <label title="Boots from CD-ROM"><input id=filter_cd type=checkbox> CD</label>
+            <label title="Boots from hard disk"><input id=filter_hd type=checkbox> HD</label>
+            Size:
+            <label title="Fits it bootsector"><input id=filter_bootsector type=checkbox> 512 B</label>
+            <label><input id=filter_lt5mb type=checkbox> &lt;5 MB</label>
+            <label><input id=filter_gt5mb type=checkbox> &gt;5 MB</label>
+            Status:
+            <label title="Most recent release is younger than 10 years"><input id=filter_modern type=checkbox> Modern</label>
+            <label title="No release in 10 years"><input id=filter_historic type=checkbox> Historic</label>
+            License:
+            <label><input id=filter_opensource type=checkbox> Open-Source</label>
+            <label><input id=filter_proprietary type=checkbox> Proprietary</label>
+            Arch:
+            <label><input id=filter_16bit type=checkbox> 16-bit</label>
+            <label><input id=filter_32bit type=checkbox> 32-bit</label>
+            <!--<label><input type=checkbox> Microkernel</label>-->
+            <!--<label title="Uses a saved memory dump to skip the boot process"><input type=checkbox> skip boot process</label>-->
+            <!--<label title="Supports networking (in v86)"><input type=checkbox> networking</label>
+            <label title="Supports audio output (in v86)"><input type=checkbox> audio</label>
+            <label title="Supports the serial console (in v86)"><input type=checkbox> serial</label>
+            <label title="Supports filesharing using virtio-9p (in v86)"><input type=checkbox> 9pfs</label>-->
+            Lang:
+            <label title="Written in assembly language"><input id=filter_asm type=checkbox> ASM</label>
+            <label title="Written in C"><input id=filter_c type=checkbox> C</label>
+            <label title="Written in C++"><input id=filter_cpp type=checkbox> C++</label>
+            <label title="Written in other languages"><input id=filter_other_lang type=checkbox> Other</label>
+            <!--<label><input type=checkbox> contains: games</label>
+            <label><input type=checkbox> contains: demos</label>
+            <label><input type=checkbox> contains: compilers</label>
+            <label><input type=checkbox> contains: web browsers</label>-->
+            <div style="text-align: right; float: right">
+                 <a id="reset_filters">Reset filters</a> / <a href="#setup">Skip to custom settings</a>
+            </div>
+            <br style="clear: both">
+        </div>
+        <hr>
+
+        <div class="table" id="oses">
+            <div class="th">
+                <div class="tr">
+                    <span>Name</span>
+                    <span>Size</span>
+                    <span>UI</span>
+                    <span>Family</span>
+                    <span>Arch</span>
+                    <span>Status</span>
+                    <span>Source</span>
+                    <span>Lang</span>
+                    <span>Medium</span>
+                    <span>Notes</span>
+                </div>
+            </div>
+<a class="tr" href="?profile=android" id="start_android"><span>Android</span> <span>54+ MB</span> <span><div class=gui_icon></div></span> <span>Linux</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C++</span> <span>CD</span> <span>Android x86 1.6-r2</span></a>
+<a class="tr" href="?profile=archlinux" id="start_archlinux"><span>Arch Linux</span> <span>15+ MB</span> <span><div class=tui_icon></div></span> <span>Linux</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>9pfs</span> <span>Various packages, including Xorg, Firefox and more</span></a>
+<a class="tr" href="?profile=buildroot" id="start_buildroot"><span>Buildroot Linux</span> <span>4.9 MB</span> <span><div class=tui_icon></div></span> <span>Linux</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>bzImage</span> <span>Minimal Linux with Lua, ping, curl, telnet</span></a>
+<a class="tr" href="?profile=dsl" id="start_dsl"><span>Damn Small Linux</span> <span>50 MB</span> <span><div class=gui_icon></div></span> <span>Linux</span> <span>32-bit</span> <span>Historic</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>4.11.rc2 with Firefox 2.0</span></a>
+<a class="tr" href="?profile=elks" id="start_elks"><span>ELKS</span> <span>1.2 MB</span> <span><div class=tui_icon></div></span> <span>Linux-like</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>Linux for 8086</span></a>
+<a class="tr" href="?profile=nodeos" id="start_nodeos"><span>NodeOS</span> <span>14 MB</span> <span><div class=tui_icon></div></span> <span>Linux</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>bzImage</span> <span>Linux with nodejs as /bin/init</span></a>
+<a class="tr" href="?profile=tilck" id="start_tilck"><span>Tilck</span> <span>16 MB</span> <span><div class=tui_icon></div></span> <span>Linux-like</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>Tiny Linux-Compatible Kernel</span></a>
+<a class="tr" href="?profile=freebsd" id="start_freebsd"><span>FreeBSD</span> <span>16+ MB</span> <span><div class=tui_icon></div></span> <span>BSD</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>FreeBSD 12.0</span></a>
+<a class="tr" href="?profile=netbsd" id="start_netbsd"><span>NetBSD</span> <span>23+ MB</span> <span><div class=gui_icon></div></span> <span>BSD</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>NetBSD 4.0 with Xorg</span></a>
+<a class="tr" href="?profile=openbsd" id="start_openbsd"><span>OpenBSD</span> <span>11+ MB</span> <span><div class=tui_icon></div></span> <span>BSD</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>OpenBSD 6.6</span></a>
+<a class="tr" href="?profile=archhurd" id="start_archhurd"><span>Arch Hurd</span> <span>16+ MB</span> <span><div class=tui_icon></div></span> <span>Hurd</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>A port of Arch Linux to the GNU Hurd system</span></a>
+<a class="tr" href="?profile=bsdos" id="start_bsdos"><span>BSD/OS</span> <span>10+ MB</span> <span><div class=tui_icon></div></span> <span>BSD</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>C</span> <span>HD</span> <span>A proprietary Unix released in 1993 as BSD/386. Includes gcc and perl5</span></a>
+<a class="tr" href="?profile=fiwix" id="start_fiwix"><span>FiwixOS</span> <span>4.2+ MB</span> <span><div class=tui_icon></div></span> <span>Unix-like</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>With Doom</span></a>
+<a class="tr" href="?profile=minix" id="start_minix"><span>Minix</span> <span>30+ MB</span> <span><div class=tui_icon></div></span> <span>Unix-like</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>Minix 3.3</span></a>
+<a class="tr" href="?profile=redox" id="start_redox"><span>Redox</span> <span>31+ MB</span> <span><div class=gui_icon></div></span> <span>Unix-like</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>Rust</span> <span>HD</span> <span>A Unix-like microkernel OS written in Rust</span></a>
+<a class="tr" href="?profile=serenity" id="start_serenity"><span>SerenityOS</span> <span>16+ MB</span> <span><div class=gui_icon></div></span> <span>Unix-like</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C++</span> <span>HD</span> <span>Web browser, various games and demos</span></a>
+<a class="tr" href="?profile=sortix" id="start_sortix"><span>Sortix</span> <span>67 MB</span> <span><div class=tui_icon></div></span> <span>Unix-like</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C++</span> <span>CD</span> <span>A small self-hosting Unix-like operating system</span></a>
+<a class="tr" href="?profile=soso" id="start_soso"><span>Soso</span> <span>7.6 MB</span> <span><div class=gui_icon></div></span> <span>Unix-like</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span> A Simple Unix-like operating system</span></a>
+<a class="tr" href="?profile=syllable" id="start_syllable"><span>Syllable</span> <span>28+ MB</span> <span><div class=gui_icon></div></span> <span>Unix-like</span> <span>32-bit</span> <span>Historic</span> <span>Open-source</span> <span>C++</span> <span>HD</span> <span>A user friendly, POSIX compatible OS</span></a>
+<a class="tr" href="?profile=unix-v7" id="start_unix-v7"><span>Unix V7</span> <span>0.5+ MB</span> <span><div class=tui_icon></div></span> <span>Unix</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>C</span> <span>HD</span> <span>Unix V7 port for x86, including Amsterdam Compiler Kit</span></a>
+<a class="tr" href="?profile=quantixos" id="start_quantixos"><span>QuantixOS</span> <span>3.1 MB</span> <span><div class=tui_icon></div></span> <span>Unix-like</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C, ASM</span> <span>CD</span> <span>A UNIX-like operating system written in x86 Intel Assembly and C</span></a>
+<a class="tr" href="?profile=beos" id="start_beos"><span>BeOS 5</span> <span>34+ MB</span> <span><div class=gui_icon></div></span> <span>BeOS</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>C++</span> <span>HD</span> <span>With Opera 3.62, NetPositive</span></a>
+<a class="tr" href="?profile=haiku" id="start_haiku"><span>Haiku</span> <span>36+ MB</span> <span><div class=gui_icon></div></span> <span>BeOS</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C++</span> <span>HD</span> <span>Networking (WebPositive), OCaml, 2048, NetHack</span></a>
+<a class="tr" href="?profile=aros-broadway" id="start_aros-broadway"><span>AROS Broadway</span> <span>25+ MB</span> <span><div class=gui_icon></div></span> <span>AmigaOS</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>AmigaOS-like graphical OS</span></a>
+<a class="tr" href="?profile=icaros" id="start_icaros"><span>Icaros Desktop</span> <span>60+ MB</span> <span><div class=gui_icon></div></span> <span>AmigaOS</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>AmigaOS-like graphical OS</span></a>
+<a class="tr" href="?profile=tinyaros" id="start_tinyaros"><span>Tiny Aros</span> <span>17+ MB</span> <span><div class=gui_icon></div></span> <span>AmigaOS</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>AmigaOS-like graphical OS</span></a>
+<a class="tr" href="?profile=9front" id="start_9front"><span>9front</span> <span>5.2+ MB</span> <span><div class=gui_icon></div></span> <span>Plan 9</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>An actively maintained fork of Plan 9</span></a>
+<a class="tr" href="?profile=9legacy" id="start_9legacy"><span>9legacy</span> <span>13 MB</span> <span><div class=gui_icon></div></span> <span>Plan 9</span> <span>32-bit</span> <span>Historic</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>A set of patches based on the latest release of Plan 9</span></a>
+<a class="tr" href="?profile=reactos" id="start_reactos"><span>ReactOS</span> <span>17+ MB</span> <span><div class=gui_icon></div></span> <span>Windows-like</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C++</span> <span>HD</span> <span>QtWeb, LBreakout2, OpenTTD, Bochs, TCC</span></a>
+<a class="tr" href="?profile=windows1" id="start_windows1"><span>Windows 1.01</span> <span>0.7 MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>16-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM, C</span> <span>Floppy</span> <span>The first release version of Windows</span></a>
+<a class="tr" href="?profile=windows2" id="start_windows2"><span>Windows 2.03</span> <span>1.8 MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>16-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM, C</span> <span>HD</span> <span>Reversi, Paint</span></a>
+<a class="tr" href="?profile=windows30" id="start_windows30"><span>Windows 3.0</span> <span>16 MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>16-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM, C</span> <span>HD</span> <span>CorelDRAW! 2.0, Actor 2.0, The Best of Microsoft Entertainment Pack</span></a>
+<a class="tr" href="?profile=windows31" id="start_windows31"><span>Windows 3.1</span> <span>17 MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>16-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM, C</span> <span>HD</span> <span>QBasic, Minesweeper, Solitaire</span></a>
+<a class="tr" href="?profile=windows95" id="start_windows95"><span>Windows 95</span> <span>19+ MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM, C</span> <span>HD</span> <span>Age of Empires, FASM, POV-Ray, Hover!</span></a>
+<a class="tr" href="?profile=windows98" id="start_windows98"><span>Windows 98</span> <span>13+ MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM, C</span> <span>HD</span> <span>FreeCell, Hearts, sheep.exe, IE 5</span></a>
+<a class="tr" href="?profile=windows-me" id="start_windows-me"><span>Windows ME</span> <span>28+ MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM, C</span> <span>HD</span> <span>Visual Basic, Office 97</span></a>
+<a class="tr" href="?profile=windowsnt3" id="start_windowsnt3"><span>Windows NT 3.1</span> <span>18+ MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>C++</span> <span>HD</span> <span>The first retail version of Windows NT</span></a>
+<a class="tr" href="?profile=windowsnt35" id="start_windowsnt35"><span>Windows NT 3.51</span> <span>28+ MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>C++</span> <span>HD</span> <span>Internet Explorer 3 and Visual FoxPro 3.0</span></a>
+<a class="tr" href="?profile=windowsnt4" id="start_windowsnt4"><span>Windows NT 4.0</span> <span>16+ MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>C++</span> <span>HD</span> <span>Windows NT 4.0 Service Pack 1</span></a>
+<a class="tr" href="?profile=windows2000" id="start_windows2000"><span>Windows 2000</span> <span>28+ MB</span> <span><div class=gui_icon></div></span> <span>Windows</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>C++</span> <span>HD</span> <span>IE 6, K-Meleon, Winamp, Delphi, NetHack and more</span></a>
+<a class="tr" href="?profile=86dos" id="start_86dos"><span>86-DOS</span> <span>0.1 MB</span> <span><div class=tui_icon></div></span> <span>DOS</span> <span>16-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM</span> <span>Floppy</span> <span>86-DOS version 1.0</span></a>
+<a class="tr" href="?profile=ibm-exploring" id="start_ibm-exploring"><span>Exploring IBM</span> <span>0.1 MB</span> <span><div class=tui_icon></div></span> <span>DOS</span> <span>16-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM</span> <span>Floppy</span> <span>Learning program on how to use a computer</span></a>
+<a class="tr" href="?profile=freedos" id="start_freedos"><span>FreeDOS</span> <span>0.6 MB</span> <span><div class=tui_icon></div></span> <span>DOS</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM, C</span> <span>Floppy</span> <span>nasm, vim, debug.com, Rogue, various demos</span></a>
+<a class="tr" href="?profile=freegem" id="start_freegem"><span>FreeGEM</span> <span>1.6+ MB</span> <span><div class=gui_icon></div></span> <span>DOS</span> <span>16-bit</span> <span>Historic</span> <span>Open-source</span> <span>ASM, C</span> <span>HD</span> <span>Graphical desktop for FreeDOS</span></a>
+<a class="tr" href="?profile=xcom" id="start_xcom"><span>Xcom</span> <span>1.3 MB</span> <span><div class=gui_icon></div></span> <span>DOS</span> <span>16-bit</span> <span>Historic</span> <span>Open-source</span> <span>ASM, C</span> <span>Floppy</span> <span>Graphical desktop for FreeDOS</span></a>
+<a class="tr" href="?profile=msdos4" id="start_msdos4"><span>MS-DOS 4</span> <span>0.5 MB</span> <span><div class=tui_icon></div></span> <span>DOS</span> <span>16-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM</span> <span>Floppy</span> <span>Contains EDLIN</span></a>
+<a class="tr" href="?profile=msdos" id="start_msdos"><span>MS-DOS 6.22</span> <span>2.4+ MB</span> <span><div class=tui_icon></div></span> <span>DOS</span> <span>16-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM</span> <span>HD</span> <span>Doom, Sim City, OCaml 1.0, Turbo C and more</span></a>
+<a class="tr" href="?profile=pcmos" id="start_pcmos"><span>PC-MOS/386</span> <span>0.7 MB</span> <span><div class=tui_icon></div></span> <span>DOS</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>ASM, C</span> <span>Floppy</span> <span>Multi-user and multi-tasking OS</span></a>
+<a class="tr" href="?profile=psychdos" id="start_psychdos"><span>PsychDOS</span> <span>4.6+ MB</span> <span><div class=gui_icon></div></span> <span>DOS</span> <span>16-bit</span> <span>Historic</span> <span>Open-source</span> <span>ASM</span> <span>HD</span> <span>ANSI-like graphical desktop for FreeDOS</span></a>
+<a class="tr" href="?profile=leetos" id="start_leetos"><span>lEEt/OS</span> <span>0.5 MB</span> <span><div class=tui_icon></div></span> <span>DOS</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM, C</span> <span>Floppy</span> <span>Graphical desktop for ST-DOS</span></a>
+<a class="tr" href="?profile=doof" id="start_doof"><span>Doom On One Floppy</span> <span>1.1 MB</span> <span><div class=gui_icon></div></span> <span>DOS</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>C, ASM</span> <span>Floppy</span> <span>Doom Shareware that fits on one floppy disk</span></a>
+<a class="tr" href="?profile=chimaeraos" id="start_chimaeraos"><span>Chimaera OS</span> <span>29 KB</span> <span><div class=tui_icon></div></span> <span>DOS</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>HD</span> <span>MS-DOS compatible operating system for i8086 and newer</span></a>
+<a class="tr" href="?profile=bleskos" id="start_bleskos"><span>BleskOS</span> <span>0.2 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>Alternative OS for older PCs</span></a>
+<a class="tr" href="?profile=bluejay" id="start_bluejay"><span>Blue Jay</span> <span>83 KB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Floppy</span> <span>Based on MikeOS</span></a>
+<a class="tr" href="?profile=boneos" id="start_boneos"><span>BoneOS</span> <span>3.0 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>Simple hobby OS</span></a>
+<a class="tr" href="?profile=bootchess" id="start_bootchess"><span>BootChess</span> <span>4.0 KB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Floppy</span> <span>Chess in a bootsector</span></a>
+<a class="tr" href="?profile=catk" id="start_catk"><span>CatK</span> <span>3.2 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>Simple Unix-like kernel</span></a>
+<a class="tr" href="?profile=crazierl" id="start_crazierl"><span>Crazierl</span> <span>14 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C, Erlang</span> <span>Multiboot</span> <span>An Erlang Operating System</span></a>
+<a class="tr" href="?profile=duskos" id="start_duskos"><span>Dusk OS</span> <span>0.4 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>A 32-bit Forth</span></a>
+<a class="tr" href="?profile=floppybird" id="start_floppybird"><span>Floppy Bird</span> <span>6.5 KB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>Floppy</span> <span>Flappy Bird game in a bootsector</span></a>
+<a class="tr" href="?profile=helenos" id="start_helenos"><span>HelenOS</span> <span>7.9 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>A microkernel-based multiserver OS</span></a>
+<a class="tr" href="?profile=hello-v86" id="start_hello-v86"><span>Hello v86</span> <span>512 B</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>Small bootsector demo for v86</span></a>
+<a class="tr" href="?profile=house" id="start_house"><span>House</span> <span>1.1 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>Haskell</span> <span>Floppy</span> <span>Haskell User's Operating System and Environment</span></a>
+<a class="tr" href="?profile=jx" id="start_jx"><span>JX</span> <span>1.3 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>Java</span> <span>Floppy</span> <span>Java-based operating system</span></a>
+<a class="tr" href="?profile=kolibrios" id="start_kolibrios"><span>KolibriOS</span> <span>1.3 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Floppy</span> <span>Various apps, games and demos</span></a>
+<a class="tr" href="?profile=littlekernel" id="start_littlekernel"><span>Little Kernel</span> <span>0.4 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>Multiboot</span> <span>An embedded kernel designed for small systems</span></a>
+<a class="tr" href="?profile=mcp" id="start_mcp"><span>M/CP</span> <span>512 B</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>The Minimal Control Program</span></a>
+<a class="tr" href="?profile=mikeos" id="start_mikeos"><span>MikeOS</span> <span>0.2 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>CD</span> <span>Contains a FORTH and BASIC interpreter and several games</span></a>
+<a class="tr" href="?profile=mobius" id="start_mobius"><span>Mobius</span> <span>1.3 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>Floppy</span> <span>POSIX and Win32 compatible OS</span></a>
+<a class="tr" href="?profile=mu" id="start_mu"><span>Mu</span> <span>0.2 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>Minimal-dependency hobbyist computing stack</span></a>
+<a class="tr" href="?profile=nanoshell" id="start_nanoshell"><span>NanoShell</span> <span>3.5 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>Multi-tasked 32-bit OS with Win9x-like GUI</span></a>
+<a class="tr" href="?profile=newos" id="start_newos"><span>NewOS</span> <span>0.6 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C++</span> <span>Floppy</span> <span>Cross-platform portable OS</span></a>
+<a class="tr" href="?profile=nopeos" id="start_nopeos"><span>Nope OS</span> <span>92 KB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>Simple OS with BASIC interpreter</span></a>
+<a class="tr" href="?profile=oberon" id="start_oberon"><span>Oberon</span> <span>1.6 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Historic</span> <span>Open-source</span> <span>Oberon</span> <span>HD</span> <span>Native Oberon 2.3.6</span></a>
+<a class="tr" href="?profile=qnx" id="start_qnx"><span>QNX 4.05</span> <span>1.4 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>C</span> <span>Floppy</span> <span>1999 demo disk</span></a>
+<a class="tr" href="?profile=sectorlisp" id="start_sectorlisp"><span>SectorLISP</span> <span>512 B</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>Bootstrapping LISP in a Boot Sector</span></a>
+<a class="tr" href="?profile=skift" id="start_skift"><span>Skift</span> <span>44 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C++</span> <span>CD</span> <span>A hobby OS built from scratch using C/C++</span></a>
+<a class="tr" href="?profile=snowdrop" id="start_snowdrop"><span>Snowdrop</span> <span>0.4 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Floppy</span> <span>16-bit hobby OS with GUI</span></a>
+<a class="tr" href="?profile=solos" id="start_solos"><span>Sol OS</span> <span>0.3 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Proprietary</span> <span>ASM</span> <span>Floppy</span> <span>Simple graphical OS</span></a>
+<a class="tr" href="?profile=stillalive" id="start_stillalive"><span>Still Alive</span> <span>10 KB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>Floppy</span> <span>Bootable demo that plays "Still Alive" from Portal</span></a>
+<a class="tr" href="?profile=t3xforth" id="start_t3xforth"><span>T3XFORTH</span> <span>59 KB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Historic</span> <span>Open-source</span> <span>ASM</span> <span>Floppy</span> <span>An old-school, plain vanilla FORTH system</span></a>
+<a class="tr" href="?profile=tetros" id="start_tetros"><span>TetrOS</span> <span>512 B</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>Tetris that fits into the boot sector</span></a>
+<a class="tr" href="?profile=toaruos" id="start_toaruos"><span>ToaruOS</span> <span>6.3 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>A hobby OS written from scratch</span></a>
+<a class="tr" href="?profile=bootbasic" id="start_bootbasic"><span>bootBASIC</span> <span>512 B</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>A BASIC in 512 bytes of x86 machine code</span></a>
+<a class="tr" href="?profile=pillman" id="start_pillman"><span>Pillman</span> <span>512 B</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>A yellow thing eats pills and is chased by monsters</span></a>
+<a class="tr" href="?profile=bootlogo" id="start_bootlogo"><span>bootLogo</span> <span>512 B</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>Logo language in 508 bytes</span></a>
+<a class="tr" href="?profile=bootrogue" id="start_bootrogue"><span>bootRogue</span> <span>512 B</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>A roguelike game that fits in a boot sector</span></a>
+<a class="tr" href="?profile=dino" id="start_dino"><span>dino</span> <span>512 B</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>Chrome's t-rex based bootsector game</span></a>
+<a class="tr" href="?profile=invaders" id="start_invaders"><span>Invaders</span> <span>512 B</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>Invaders in a bootsector</span></a>
+<a class="tr" href="?profile=sanos" id="start_sanos"><span>Sanos</span> <span>0.5 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>Minimalistic 32-bit x86 OS</span></a>
+<a class="tr" href="?profile=sectorforth" id="start_sectorforth"><span>sectorforth</span> <span>512 B</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Bootsector</span> <span>16-bit x86 Forth in a bootsector</span></a>
+<a class="tr" href="?profile=dancy" id="start_dancy"><span>Dancy</span> <span>1.3 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>Dancy Operating System</span></a>
+<a class="tr" href="?profile=curios" id="start_curios"><span>CuriOS</span> <span>6.6 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>Simple GUI based OS inspired by AmigaOS</span></a>
+<a class="tr" href="?profile=os64" id="start_os64"><span>OS64</span> <span>2.2 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>Commodore 64 emulator OS for x86 (slow)</span></a>
+<a class="tr" href="?profile=netboot.xyz" id="start_netboot.xyz"><span>netboot.xyz</span> <span>1.0 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>Netboot into various operating systems (slow)</span></a>
+<a class="tr" href="?profile=squeaknos" id="start_squeaknos"><span>SqueakNOS</span> <span>20 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C, Smalltalk</span> <span>CD</span> <span>Smalltalk as a Standalone OS</span></a>
+<a class="tr" href="?profile=chokanji4" id="start_chokanji4"><span>Chokanji 4</span> <span>13+ MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Historic</span> <span>Proprietary</span> <span>C</span> <span>HD</span> <span>A Japanese OS based on the TRON project</span></a>
+<a class="tr" href="?profile=mojo" id="start_mojo"><span>Mojo OS</span> <span>1.4 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C++</span> <span>CD</span> <span>A simple operating system for the x86 architecture</span></a>
+<a class="tr" href="?profile=vanadium" id="start_vanadium"><span>Vanadium OS</span> <span>0.7 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>CD</span> <span>A portable, multi-user Unix-like OS</span></a>
+<a class="tr" href="?profile=prettyos" id="start_prettyos"><span>PrettyOS</span> <span>0.5 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C++</span> <span>Floppy</span> <span>Simple OS for beginners</span></a>
+<a class="tr" href="?profile=asuro" id="start_asuro"><span>Asuro</span> <span>2.1 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>Pascal</span> <span>CD</span> <span>Asuro is a hobbyist operating system written in Pascal</span></a>
+<a class="tr" href="?profile=xenus" id="start_xenus"><span>XENUS</span> <span>2.0 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C</span> <span>HD</span> <span>The Vanadium OS predecessor</span></a>
+<a class="tr" href="?profile=bootos" id="start_bootos"><span>bootOS</span> <span>11 KB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Floppy</span> <span>a monolithic operating system in 512 bytes of x86 machine code</span></a>
+<a class="tr" href="?profile=chip4504" id="start_chip4504"><span>Chip4504</span> <span>18 KB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>16-bit</span> <span>Modern</span> <span>Open-source</span> <span>ASM</span> <span>Floppy</span> <span>CHIP-8 emulator operating system</span></a>
+<a class="tr" href="?profile=forthos" id="start_forthos"><span>ForthOS</span> <span>1.3 MB</span> <span><div class=tui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Historic</span> <span>Open-source</span> <span>Forth</span> <span>HD</span> <span>Complete standalone Forth-based operating system</span></a>
+<a class="tr" href="?profile=newos-notion" id="start_newos-notion"><span>NewOS Notion</span> <span>3.7 MB</span> <span><div class=gui_icon></div></span> <span>Custom</span> <span>32-bit</span> <span>Modern</span> <span>Open-source</span> <span>C++</span> <span>HD</span> <span>Modified NewOS with fast TCP-based window manager and Doom</span></a>
+        </div>
+
+        <hr>
+        <h4 id="setup">Setup</h4>
+        <table>
+            <tr>
+                <td width="350"><label for="cdrom_image">CD image</label></td>
+                <td>
+                    <input type="file" id="cdrom_image">
+                </td>
+            </tr>
+
+            <tr>
+                <td><label for="floppy_image">Floppy disk image</label></td>
+                <td><input type="file" id="fda_image"> or <a id="fda_toggle_empty_disk">create empty floppy disk</a><br></td>
+            </tr>
+
+            <tr>
+                <td><label for="floppy_image">Second floppy disk image</label></td>
+                <td><input type="file" id="fdb_image"> or <a id="fdb_toggle_empty_disk">create empty floppy disk</a><br></td>
+            </tr>
+
+            <tr>
+                <td><label for="hda_image">Hard disk image</label></td>
+                <td><input type="file" id="hda_image"> or <a id="hda_toggle_empty_disk">create empty hard disk</a><br></td>
+            </tr>
+
+            <tr>
+                <td><label for="hdb_image">Second hard disk image</label></td>
+                <td><input type="file" id="hdb_image"> or <a id="hdb_toggle_empty_disk">create empty hard disk</a><br></td>
+            </tr>
+
+            <!--
+            <tr>
+                <td><label for="multiboot_image">Multiboot kernel image (experimental)</td>
+                <td><input type="file" id="multiboot_image"><br></td>
+            </tr>
+            -->
+
+            <tr>
+                <td><label for="bzimage">Kernel image (bzimage)</label></td>
+                <td><input type="file" id="bzimage"><br></td>
+            </tr>
+            <tr>
+                <td><label for="initrd">initrd</label></td>
+                <td><input type="file" id="initrd"><br></td>
+            </tr>
+
+            <tr>
+                <td><label for="bios">BIOS</label></td>
+                <td><input type="file" id="bios"><br></td>
+            </tr>
+
+            <tr>
+                <td><label for="vga_bios">VGA BIOS</label></td>
+                <td><input type="file" id="vga_bios"><br></td>
+            </tr>
+
+            <tr>
+                <td colspan="2"><small>Disk images are not uploaded to the server</small><hr></td>
+            </tr>
+
+            <tr>
+                <td><label for="memory_size">Memory size</label></td>
+                <td>
+                    <input id="memory_size" type="number" value="128" min="16" max="2048" step="16"> MB<br>
+                </td>
+            </tr>
+
+            <tr>
+                <td><label for="vga_memory_size">Video Memory size</label></td>
+                <td>
+                    <input id="vga_memory_size" type="number" value="8" min="1" max="128" step="1"> MB<br>
+                </td>
+            </tr>
+
+            <tr>
+                <td colspan="2"><hr></td>
+            </tr>
+
+            <tr>
+                <td><label for="relay_url">Networking proxy</label><br>
+                    Presets: <a id="network_none">none</a>, <a id="network_inbrowser">inbrowser</a>, <a id="network_relay">public relay</a>, <a id="network_wisp">wisp</a>, <a id="network_fetch">fetch</a></td>
+                <td>
+                    <input id="relay_url" type="text" value="wss://relay.widgetry.org/">
+                </td>
+            </tr>
+
+            <tr>
+                <td><label for="net_device_type">Network Device Type</label></td>
+                <td>
+                    <select id="net_device_type">
+                        <option value="ne2k">ne2k</option>
+                        <option value="virtio">virtio</option>
+                    </select>
+                 </td>
+            </tr>
+
+            <tr>
+                <td><label for="mtu">Network MTU (only used for virtio)</label></td>
+                <td>
+                    <input id="mtu" type="number" value="1500" min="68" max="65535" step="1"> B<br>
+                 </td>
+            </tr>
+
+            <tr>
+                <td colspan="2"><hr></td>
+            </tr>
+
+            <tr>
+                <td><label for="disable_audio">Disable audio</label></td>
+                <td>
+                    <input id="disable_audio" type="checkbox"><br>
+                </td>
+            </tr>
+
+            <tr>
+                <td><label for="acpi">Enable ACPI (experimental)</label></td>
+                <td>
+                    <input id="acpi" type="checkbox"><br>
+                </td>
+            </tr>
+
+            <tr>
+                <td colspan="2"><hr></td>
+            </tr>
+
+            <tr>
+                <td><label for="boot_order">Boot order</label></td>
+                <td>
+                    <select id="boot_order">
+                        <option value="0">Auto</option>
+                        <option value="213">CD / Floppy / Hard Disk</option>
+                        <option value="123">CD / Hard Disk / Floppy</option>
+                        <option value="231">Floppy / CD / Hard Disk</option>
+                        <option value="321">Floppy / Hard Disk / CD</option>
+                        <option value="312">Hard Disk / Floppy / CD</option>
+                        <option value="132">Hard Disk / CD / Floppy</option>
+                    </select>
+                 </td>
+            </tr>
+        </table>
+
+        <br>
+        <button id="start_emulation">Start Emulation</button>
+    </div>
+
+    <div id="runtime_options" style="display: none">
+        <button id="run">Pause</button>
+        <button id="reset">Reset</button>
+        <button id="exit">Exit</button>
+        <button id="ctrlaltdel">Send Ctrl-Alt-Del</button>
+        <button id="alttab">Send Alt-Tab</button>
+        <button id="get_fda_image">Get floppy image</button>
+        <button id="get_fdb_image">Get second floppy image</button>
+        <button id="get_hda_image">Get hard disk image</button>
+        <button id="get_hdb_image">Get second hard disk image</button>
+        <button id="get_cdrom_image">Get CD-ROM image</button>
+        <button id="change_fda_image">Insert floppy image</button>
+        <button id="change_fdb_image">Insert second floppy image</button>
+        <button id="change_cdrom_image" title="Either a single .iso file or multiple files of any type">Insert CD image</button>
+        <button id="save_state">Save State</button>
+        <button id="load_state">Load State</button>
+        <button id="memory_dump">Memory Dump</button>
+        <button id="capture_network_traffic" title="In wireshark: file -> import from hex -> tick direction indication, timestamp %s.%f">Capture network traffic</button>
+        <button id="toggle_mouse">Disable mouse</button>
+        <button id="lock_mouse">Lock mouse</button>
+        <button id="fullscreen">Go fullscreen</button>
+        <button id="take_screenshot">Take screenshot</button>
+        <button id="mute">Mute</button>
+        <button id="toggle_theatre">Enable theatre mode</button>
+        <button style="display: none" id="toggle_zoom_to_fit">Enable zoom to fit</button>
+
+        <label>
+            Scale:
+            <input type="number" min="0.25" step="0.25" value="1.0" id="scale" style="width: 50px">
+        </label>
+    </div>
+    <pre style="display: none" id="loading"></pre>
+</div>
+
+<div id="screen_container" style="display: none">
+    <div id="screen"></div>
+    <canvas id="vga"></canvas>
+    <div style="position: absolute; top: 0; z-index: 10">
+        <textarea class="phone_keyboard"></textarea>
+    </div>
+</div>
+
+
+<div id="runtime_infos" style="display: none">
+    Running: <span id="running_time">0s</span> <br>
+    Speed: <span id="speed">0</span> mIPS<br>
+    Avg speed: <span id="avg_speed">0</span> mIPS<br>
+    <br>
+    <div id="info_storage" style="display: none">
+        <b>IDE device<span id="ide_type"></span></b><br>
+        Sectors read: <span id="info_storage_sectors_read">0</span><br>
+        Bytes read: <span id="info_storage_bytes_read">0</span><br>
+        Sectors written: <span id="info_storage_sectors_written">0</span><br>
+        Bytes written: <span id="info_storage_bytes_written">0</span><br>
+        Status: <span id="info_storage_status"></span><br>
+        <br>
+    </div>
+    <div id="info_filesystem" style="display: none">
+        <b>9p Filesystem</b><br>
+        Bytes read: <span id="info_filesystem_bytes_read">0</span><br>
+        Bytes written: <span id="info_filesystem_bytes_written">0</span><br>
+        <div style="white-space: nowrap; overflow-x: hidden">Last file: <span id="info_filesystem_last_file"></span></div>
+        Status: <span id="info_filesystem_status"></span><br>
+        <br>
+    </div>
+    <div id="info_network" style="display: none">
+        <b>Network</b><br>
+        Bytes received: <span id="info_network_bytes_received">0</span><br>
+        Bytes transmitted: <span id="info_network_bytes_transmitted">0</span><br>
+        <br>
+    </div>
+    <b>VGA</b><br>
+    Mode: <span id="info_vga_mode"></span><br>
+    Resolution: <span id="info_res">-</span><br>
+    <br>
+    Mouse: <span id="info_mouse_enabled">No</span><br>
+
+    <div id="description" style="display: none"><br></div>
+</div>
+
+<div id="filesystem_panel" style="display: none">
+    <label>
+        Send files to emulator<br>
+        <input type="file" id="filesystem_send_file" multiple>
+    </label>
+    <br><br>
+    <label>
+        Get file from emulator<br>
+        <input type="text" id="filesystem_get_file" placeholder="Absolute path">
+    </label>
+</div>
+
+<br style="clear: both"><br>
+
+<div id="terminal"></div>
+
+<button id="toggle_ui" style="display: none">Hide UI</button>
+<div id="theatre_background" style="display: none"></div>
+
+<br style="clear: both">
+<code>Version: <a id="version" href="https://github.com/copy/v86/commits/4e4bf556">4e4bf556</a> (Mar 31, 2026 01:03)</code>
+
+<!-- Context menu + toast container -->
+<div id="k-ctx-menu"></div>
+<div id="k-toasts"></div>
+
+<!-- File browser sidebar -->
+<div id="k-sidebar">
+    <div id="k-sidebar-header">
+        <span>/workspace</span>
+        <button id="k-sidebar-close" title="Close sidebar">&times;</button>
+    </div>
+    <div id="k-file-tree"></div>
+    <div id="k-file-preview"></div>
+</div>
+
+<!-- Karkhana bottom bar — must be AFTER #terminal in DOM to stack above xterm canvases -->
+<div id="k-workspace-bar" style="display:none;">
+    <button id="k-sidebar-toggle" style="background:none;border:none;color:#666;font-size:0.85rem;cursor:pointer;padding:3px 6px;margin-right:6px;" title="File browser">&#9776;</button>
+    <button id="k-workspace-btn">Open Workspace</button>
+    <div id="k-bridge-dot" title="Bridge idle"></div>
+    <button id="k-help-btn" style="background:none;border:none;color:#555;font-size:0.85rem;cursor:pointer;padding:3px 8px;margin-right:2px;" title="Help (F1)">?</button>
+    <button id="k-settings-btn">&#9881; Settings</button>
+</div>
+
+<!-- Settings panel -->
+<div id="k-settings">
+    <button class="close-btn" id="k-settings-close">&times;</button>
+    <h3>Karkhana Settings</h3>
+
+    <details class="k-section" open>
+        <summary>LLM Provider</summary>
+        <div class="provider-row" style="margin-top:8px;">
+            <button class="chat-mode-btn sel" data-mode="api">API</button>
+            <button class="chat-mode-btn" data-mode="local">In-Browser</button>
+        </div>
+
+        <div id="k-api-cfg">
+            <label>Endpoint Presets</label>
+            <div class="provider-row" style="flex-wrap:wrap;">
+                <button class="preset-btn" data-url="https://api.anthropic.com" data-format="anthropic">Anthropic</button>
+                <button class="preset-btn" data-url="https://openrouter.ai/api/v1" data-format="openai">OpenRouter</button>
+                <button class="preset-btn" data-url="https://api.openai.com/v1" data-format="openai">OpenAI</button>
+                <button class="preset-btn" data-url="http://localhost:1234/v1" data-format="openai">LM Studio</button>
+                <button class="preset-btn" data-url="http://localhost:11434" data-format="ollama">Ollama</button>
+            </div>
+            <label>Endpoint URL</label>
+            <input type="text" id="k-api-url" placeholder="https://api.openai.com/v1" value="">
+            <label>API Key</label>
+            <input type="password" id="k-api-key" placeholder="sk-...">
+            <label>Model</label>
+            <input type="text" id="k-api-model" placeholder="claude-sonnet-4-20250514" value="claude-sonnet-4-20250514">
+            <button id="k-discover-models" style="margin-top:4px;padding:3px 10px;font-size:0.7rem;background:none;border:1px solid #333;color:#888;border-radius:3px;cursor:pointer;">Discover Models</button>
+            <div id="k-model-list" style="display:none;max-height:120px;overflow-y:auto;margin-top:4px;border:1px solid #333;border-radius:3px;background:#1a1a28;"></div>
+            <div class="hint">Keys stored in your browser only. Never sent to any server.</div>
+            <div class="hint" id="k-api-format-hint"></div>
+        </div>
+
+        <div id="k-local-cfg" style="display:none">
+            <label>In-Browser Model (WebGPU)</label>
+            <select id="k-local-model" style="width:100%;padding:6px 8px;background:#1a1a28;border:1px solid #333;border-radius:3px;color:#ccc;font-size:0.8rem;">
+                <option value="qwen-0.5b">Qwen 2.5 0.5B (smallest, fast)</option>
+                <option value="smollm-1.7b">SmolLM2 1.7B</option>
+                <option value="qwen-1.5b">Qwen 2.5 1.5B</option>
+            </select>
+            <button id="k-load-model" style="margin-top:8px;padding:5px 16px;font-size:0.75rem;background:none;border:1px solid #444;color:#aaa;border-radius:3px;cursor:pointer;width:100%;">Load Model</button>
+            <div id="k-model-prog" style="display:none;margin-top:6px;">
+                <div style="width:100%;height:3px;background:#1a1a24;border-radius:2px;overflow:hidden;">
+                    <div id="k-model-prog-bar" style="width:0;height:100%;background:#ff6b35;border-radius:2px;transition:width 0.12s;"></div>
+                </div>
+            </div>
+            <div id="k-local-status" style="font-size:0.7rem;color:#555;margin-top:4px;"></div>
+            <div class="hint">Runs entirely in your browser via WebGPU. No API key needed.</div>
+        </div>
+    </details>
+
+    <details class="k-section">
+        <summary>Bridge</summary>
+        <label>Status</label>
+        <div id="k-bridge-status" style="font-size:0.75rem;color:#666;">Idle</div>
+    </details>
+
+    <details class="k-section">
+        <summary>MCP Server</summary>
+        <div class="hint">External agents connect to Karkhana as a sandboxed Linux environment. Only works while this tab is open.</div>
+        <div class="hint" style="margin-top:6px;">&#9888; Cron jobs work inside the VM but stop when this tab is closed.</div>
+        <label style="margin-top:8px;">Token</label>
+        <div style="display:flex;gap:6px;align-items:center;">
+            <input type="text" id="k-mcp-token" readonly style="flex:1;font-size:0.7rem;color:#666;">
+            <button id="k-mcp-copy" style="background:none;border:1px solid #333;color:#888;padding:3px 8px;border-radius:3px;font-size:0.65rem;cursor:pointer;">Copy</button>
+            <button id="k-mcp-regen" style="background:none;border:1px solid #333;color:#888;padding:3px 8px;border-radius:3px;font-size:0.65rem;cursor:pointer;">Regen</button>
+        </div>
+        <label style="margin-top:8px;">Config (paste into claude_desktop_config.json)</label>
+        <pre id="k-mcp-config" style="font-size:0.6rem;color:#666;background:#1a1a28;padding:8px;border-radius:3px;overflow-x:auto;white-space:pre;margin-top:4px;border:1px solid #222;cursor:pointer;" title="Click to copy"></pre>
+    </details>
+</div>
+
+<!-- Landing page -->
+<div id="k-landing" style="display:none;">
+    <h1>Karkhana</h1>
+    <p class="hindi">कारख़ाना</p>
+    <p class="tagline">A real Linux VM in your browser tab. Shell, filesystem, coding agent &mdash; no server, no install, nothing leaves your device.</p>
+    <div class="features">
+        <span class="feat">Real Linux 6.8 kernel</span>
+        <span class="feat">Persistent /workspace</span>
+        <span class="feat">BYOK LLM agent</span>
+        <span class="feat">In-browser AI (WebGPU)</span>
+        <span class="feat">MCP server</span>
+    </div>
+    <button class="launch-btn" id="k-launch">Launch Karkhana</button>
+    <span class="docs-link" id="k-docs-link">Documentation</span>
+    <div class="credit">Built by <a href="https://naklitechie.github.io/" target="_blank">@NakliTechie</a></div>
+</div>
+
+<!-- Karkhana boot overlay -->
+<div id="karkhana-boot">
+    <div class="inner">
+        <h1>Karkhana</h1>
+        <p class="hindi">कारख़ाना</p>
+        <p class="status" id="k-status">Loading Linux&hellip;</p>
+        <div class="bar-wrap"><div class="bar" id="k-bar"></div></div>
+    </div>
+</div>
+
+<script>
+(function() {
+    'use strict';
+
+    /* ═══════════════════════════════════════════════════
+       Landing page or boot
+       ═══════════════════════════════════════════════════ */
+    if (!location.search.includes('profile=')) {
+        /* Show landing page */
+        document.getElementById('k-landing').style.display = 'flex';
+        document.getElementById('k-launch').onclick = function() {
+            location.href = location.pathname + '?profile=buildroot6';
+        };
+        document.getElementById('k-docs-link').onclick = function() {
+            document.getElementById('k-landing').style.display = 'none';
+            showDocs();
+        };
+        return;
+    }
+
+    /* ═══════════════════════════════════════════════════
+       IndexedDB helpers (for workspace handle persistence)
+       ═══════════════════════════════════════════════════ */
+    function idbOpen() {
+        return new Promise(function(resolve, reject) {
+            var r = indexedDB.open('karkhana', 1);
+            r.onupgradeneeded = function() { r.result.createObjectStore('cache'); };
+            r.onsuccess = function() { resolve(r.result); };
+            r.onerror = function() { reject(r.error); };
+        });
+    }
+    function idbGet(key) {
+        return idbOpen().then(function(db) {
+            return new Promise(function(resolve, reject) {
+                var tx = db.transaction('cache', 'readonly');
+                var req = tx.objectStore('cache').get(key);
+                req.onsuccess = function() { resolve(req.result); };
+                req.onerror = function() { reject(req.error); };
+            });
+        });
+    }
+    function idbSet(key, val) {
+        return idbOpen().then(function(db) {
+            return new Promise(function(resolve, reject) {
+                var tx = db.transaction('cache', 'readwrite');
+                tx.objectStore('cache').put(val, key);
+                tx.oncomplete = function() { resolve(); };
+                tx.onerror = function() { reject(tx.error); };
+            });
+        });
+    }
+
+    /* ═══════════════════════════════════════════════════
+       WorkspaceStorage — FSA with OPFS fallback
+       ═══════════════════════════════════════════════════ */
+    var WorkspaceStorage = {
+        mode: null,
+        root: null,
+        name: '',
+
+        init: async function(handle) {
+            if (handle) {
+                var perm = await handle.requestPermission({ mode: 'readwrite' });
+                if (perm === 'granted') {
+                    this.root = handle;
+                    this.mode = 'fsa';
+                    this.name = handle.name;
+                    await idbSet('karkhana_workspace_handle', handle);
+                    return true;
+                }
+            }
+            return false;
+        },
+
+        initOPFS: async function() {
+            this.root = await navigator.storage.getDirectory();
+            var karkhana = await this.root.getDirectoryHandle('workspace', { create: true });
+            this.root = karkhana;
+            this.mode = 'opfs';
+            this.name = 'browser storage';
+            return true;
+        },
+
+        pick: async function() {
+            try {
+                var handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                return await this.init(handle);
+            } catch (e) {
+                if (e.name === 'AbortError') return false;
+                console.warn('[Karkhana] FSA failed, falling back to OPFS:', e);
+                return await this.initOPFS();
+            }
+        },
+
+        tryRestore: async function() {
+            try {
+                var handle = await idbGet('karkhana_workspace_handle');
+                if (handle) return await this.init(handle);
+            } catch (e) { /* no saved handle */ }
+            return false;
+        },
+
+        resolveDir: async function(path) {
+            var parts = path.split('/').filter(Boolean);
+            var dir = this.root;
+            for (var i = 0; i < parts.length; i++) {
+                dir = await dir.getDirectoryHandle(parts[i], { create: true });
+            }
+            return dir;
+        },
+
+        readFile: async function(path) {
+            var parts = path.split('/').filter(Boolean);
+            var fname = parts.pop();
+            var dir = await this.resolveDir(parts.join('/'));
+            var fh = await dir.getFileHandle(fname);
+            var file = await fh.getFile();
+            var buf = await file.arrayBuffer();
+            return { data: new Uint8Array(buf), mtime: file.lastModified, size: file.size };
+        },
+
+        writeFile: async function(path, data) {
+            var parts = path.split('/').filter(Boolean);
+            var fname = parts.pop();
+            if (!fname) return;
+            var dir = await this.resolveDir(parts.join('/'));
+            var fh = await dir.getFileHandle(fname, { create: true });
+            var writable = await fh.createWritable();
+            await writable.write(data);
+            await writable.close();
+        },
+
+        scan: async function(dirHandle, prefix) {
+            dirHandle = dirHandle || this.root;
+            prefix = prefix || '';
+            var result = [];
+            for await (var entry of dirHandle.values()) {
+                var p = prefix + '/' + entry.name;
+                if (entry.kind === 'file') {
+                    try {
+                        var file = await entry.getFile();
+                        result.push({ path: p, mtime: file.lastModified, size: file.size });
+                    } catch (e) { /* skip unreadable */ }
+                } else if (entry.kind === 'directory' && entry.name !== '.karkhana') {
+                    var sub = await this.scan(entry, p);
+                    result = result.concat(sub);
+                }
+            }
+            return result;
+        }
+    };
+
+    /* ═══════════════════════════════════════════════════
+       SyncEngine — bidirectional FSA ↔ v86 9P sync
+       ═══════════════════════════════════════════════════ */
+    var SyncEngine = {
+        emu: null,
+        storage: null,
+        hostSnapshot: new Map(),
+        pollTimer: null,
+        writeDebounce: {},
+
+        start: function(emu, storage) {
+            this.emu = emu;
+            this.storage = storage;
+            var self = this;
+
+            /* Initial sync: push all host files into VM */
+            this.pushAllToVM().then(function() {
+                console.log('[Karkhana] Initial sync complete');
+            });
+
+            /* VM→Host: listen for file writes from inside the VM */
+            if (emu.v && typeof emu.v.register === 'function') {
+                emu.v.register('9p-write-end', function(args) {
+                    var filename = args[0];
+                    if (!filename) return;
+                    self.debouncedVMtoHost(filename);
+                }, emu);
+            }
+
+            /* Host→VM: poll FSA every 2s for changes */
+            this.pollTimer = setInterval(function() {
+                self.pollHostChanges();
+            }, 2000);
+        },
+
+        stop: function() {
+            if (this.pollTimer) clearInterval(this.pollTimer);
+        },
+
+        pushAllToVM: async function() {
+            var files = await this.storage.scan();
+            for (var i = 0; i < files.length; i++) {
+                var f = files[i];
+                try {
+                    var info = await this.storage.readFile(f.path);
+                    await this.emu.Aj(f.path, info.data);
+                    this.hostSnapshot.set(f.path, f.mtime);
+                } catch (e) {
+                    console.warn('[Karkhana] Failed to push', f.path, e.message);
+                }
+            }
+        },
+
+        debouncedVMtoHost: function(filename) {
+            var self = this;
+            var path = '/' + filename;
+            clearTimeout(this.writeDebounce[path]);
+            this.writeDebounce[path] = setTimeout(function() {
+                self.vmToHost(path);
+            }, 500);
+        },
+
+        vmToHost: async function(path) {
+            try {
+                var data = await this.emu.Yf(path);
+                if (data) {
+                    await this.storage.writeFile(path, data);
+                    this.hostSnapshot.set(path, Date.now());
+                    console.log('[Karkhana] VM→Host:', path);
+                }
+            } catch (e) {
+                console.warn('[Karkhana] VM→Host failed:', path, e.message);
+            }
+        },
+
+        pollHostChanges: async function() {
+            try {
+                var files = await this.storage.scan();
+                for (var i = 0; i < files.length; i++) {
+                    var f = files[i];
+                    var prev = this.hostSnapshot.get(f.path);
+                    if (!prev || f.mtime > prev) {
+                        var info = await this.storage.readFile(f.path);
+                        await this.emu.Aj(f.path, info.data);
+                        this.hostSnapshot.set(f.path, f.mtime);
+                        console.log('[Karkhana] Host→VM:', f.path);
+                    }
+                }
+            } catch (e) { /* ignore scan errors */ }
+        }
+    };
+
+    /* ═══════════════════════════════════════════════════
+       In-browser LLM (Transformers.js + WebGPU)
+       ═══════════════════════════════════════════════════ */
+    var LOCAL_MODELS = {
+        'qwen-0.5b':   { id: 'Qwen/Qwen2.5-0.5B-Instruct',           dtype: 'q4',    type: 'causal' },
+        'smollm-1.7b': { id: 'HuggingFaceTB/SmolLM2-1.7B-Instruct', dtype: 'q4f16', type: 'causal' },
+        'qwen-1.5b':   { id: 'Qwen/Qwen2.5-1.5B-Instruct',           dtype: 'q4f16', type: 'causal' },
+    };
+
+    var LLM_WORKER_SRC = [
+'import { env, AutoTokenizer, AutoModelForCausalLM, TextStreamer, InterruptableStoppingCriteria }',
+"  from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4/+esm';",
+'env.allowLocalModels = true; env.localModelPath = "/models/";',
+'env.allowRemoteModels = true; env.useBrowserCache = true;',
+'let tokenizer = null, model = null;',
+'const stopping = new InterruptableStoppingCriteria();',
+'const progress = p => self.postMessage({ type: "progress", data: p });',
+'async function load(modelId, dtype) {',
+'  tokenizer = await AutoTokenizer.from_pretrained(modelId, { progress_callback: progress });',
+'  model = await AutoModelForCausalLM.from_pretrained(modelId, { dtype, device: "webgpu", progress_callback: progress });',
+'  self.postMessage({ type: "status", data: "Warming up\\u2026" });',
+'  await model.generate({ ...tokenizer("a"), max_new_tokens: 1 });',
+'}',
+'async function generate(messages, id, maxTokens) {',
+'  stopping.reset();',
+'  const streamer = new TextStreamer(tokenizer, {',
+'    skip_prompt: true, skip_special_tokens: true,',
+'    callback_function: tok => self.postMessage({ type: "token", token: tok, id }),',
+'  });',
+'  const inputs = tokenizer.apply_chat_template(messages, { add_generation_prompt: true, return_dict: true });',
+'  await model.generate({ ...inputs, max_new_tokens: maxTokens, do_sample: true, temperature: 0.7, top_k: 50, top_p: 0.95, streamer, stopping_criteria: stopping });',
+'}',
+'self.addEventListener("message", async ({ data }) => {',
+'  try {',
+'    if (data.type === "load") { await load(data.modelId, data.dtype); self.postMessage({ type: "ready" }); }',
+'    else if (data.type === "generate") { await generate(data.messages, data.id, data.maxTokens || 600); self.postMessage({ type: "complete", id: data.id }); }',
+'    else if (data.type === "stop") { stopping.interrupt(); }',
+'  } catch (err) { self.postMessage({ type: "error", data: err.message || String(err) }); }',
+'});',
+    ].join('\n');
+
+    function makeWorker(src) {
+        var w = new Worker(URL.createObjectURL(new Blob([src], { type: 'application/javascript' })), { type: 'module' });
+        w.addEventListener('error', function(e) { console.error('[Karkhana] Worker error:', e.message); });
+        return w;
+    }
+
+    async function isModelCached(modelId) {
+        try {
+            var names = await caches.keys();
+            for (var i = 0; i < names.length; i++) {
+                var cache = await caches.open(names[i]);
+                var keys = await cache.keys();
+                if (keys.some(function(req) { return req.url.includes(modelId); })) return true;
+            }
+        } catch (e) {}
+        return false;
+    }
+
+    var LocalLLM = {
+        worker: null,
+        ready: false,
+        loading: false,
+    };
+
+    /* ═══════════════════════════════════════════════════
+       Networking Bridge — proxy HTTP from VM via browser fetch()
+       ═══════════════════════════════════════════════════ */
+    function getProviderConfig() {
+        var url = localStorage.getItem('karkhana_api_url') || 'https://api.anthropic.com';
+        var format = localStorage.getItem('karkhana_api_format') || 'anthropic';
+        var model = localStorage.getItem('karkhana_api_model') || 'claude-sonnet-4-20250514';
+        var provider = format; /* bridge uses this for routing */
+        return { provider: provider, model: model, url: url, format: format };
+    }
+
+    function getApiKey() {
+        return localStorage.getItem('karkhana_api_key') || '';
+    }
+
+    function authHeader(format, key) {
+        if (!key) return {};
+        if (format === 'anthropic') return { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+        return { 'Authorization': 'Bearer ' + key };
+    }
+
+    var Bridge = {
+        emu: null,
+        polling: false,
+        pollTimer: null,
+        dot: null,
+        statusEl: null,
+
+        start: function(emu) {
+            this.emu = emu;
+            this.dot = document.getElementById('k-bridge-dot');
+            this.statusEl = document.getElementById('k-bridge-status');
+            this.polling = true;
+            var self = this;
+
+            /* Write provider config into VM */
+            var cfg = getProviderConfig();
+            var cfgBytes = new TextEncoder().encode(JSON.stringify(cfg));
+            emu.Aj('/karkhana_provider.json', cfgBytes).catch(function() {});
+
+            /* Poll for requests from the VM */
+            this.pollTimer = setInterval(function() {
+                if (!self.polling) return;
+                self.checkRequest();
+            }, 200);
+
+            this.setStatus('Listening');
+            if (this.dot) { this.dot.classList.add('active'); this.dot.title = 'Bridge active'; }
+            console.log('[Karkhana] Bridge started');
+        },
+
+        stop: function() {
+            this.polling = false;
+            if (this.pollTimer) clearInterval(this.pollTimer);
+            this.setStatus('Stopped');
+        },
+
+        setStatus: function(s) {
+            if (this.statusEl) this.statusEl.textContent = s;
+        },
+
+        checkRequest: async function() {
+            if (this.busy) return;
+            try {
+                /* Only process if req exists and res does NOT */
+                var reqData = await this.emu.Yf('/karkhana_req.json').catch(function() { return null; });
+                if (!reqData || reqData.length === 0) return;
+
+                var resData = await this.emu.Yf('/karkhana_res.json').catch(function() { return null; });
+                if (resData && resData.length > 0) return; /* response pending — agent hasn't consumed it */
+
+                this.busy = true;
+                if (this.dot) this.dot.classList.add('busy');
+                this.setStatus('Processing\u2026');
+
+                var reqText = new TextDecoder().decode(reqData);
+                var req = JSON.parse(reqText);
+                var response = await this.executeRequest(req);
+
+                var resBytes = new TextEncoder().encode(JSON.stringify(response));
+                await this.emu.Aj('/karkhana_res.json', resBytes);
+
+                this.setStatus('Listening');
+                if (this.dot) this.dot.classList.remove('busy');
+                this.busy = false;
+            } catch (e) {
+                this.busy = false;
+                if (this.dot) this.dot.classList.remove('busy');
+            }
+        },
+
+        executeRequest: async function(req) {
+            /* Route to in-browser LLM if local mode is active */
+            var mode = localStorage.getItem('karkhana_mode') || 'api';
+            if (mode === 'local' && LocalLLM.ready && LocalLLM.worker) {
+                return await this.executeLocal(req);
+            }
+
+            var cfg = getProviderConfig();
+            var apiKey = getApiKey();
+            var endpoint = req.provider === 'anthropic' ? 'https://api.anthropic.com'
+                : cfg.url || 'https://api.openai.com/v1';
+            var format = req.provider || cfg.format || 'openai';
+
+            if (format === 'ollama') endpoint = cfg.url || 'http://localhost:11434';
+
+            if (!apiKey && format !== 'ollama' && !endpoint.includes('localhost')) {
+                return { status: 401, body: { error: 'No API key set. Open Settings.' } };
+            }
+
+            var url = endpoint + (req.path || '');
+            var headers = Object.assign({}, req.headers || {}, authHeader(format, apiKey));
+
+            try {
+                this.setStatus('Calling ' + format + '\u2026');
+                var res = await fetch(url, {
+                    method: req.method || 'POST',
+                    headers: headers,
+                    body: req.body || undefined,
+                });
+                var body = await res.json();
+                return { status: res.status, body: body };
+            } catch (e) {
+                return { status: 0, body: { error: e.message } };
+            }
+        },
+
+        executeLocal: function(req) {
+            var self = this;
+            self.setStatus('Generating (in-browser)\u2026');
+            return new Promise(function(resolve) {
+                /* Parse messages from the request body (Anthropic format) */
+                var body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+                var messages = (body.messages || []).map(function(m) {
+                    return { role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) };
+                });
+                /* Add system prompt if present */
+                if (body.system) messages.unshift({ role: 'system', content: body.system });
+
+                var fullText = '';
+                var msgId = 'local_' + Date.now();
+
+                var prevHandler = LocalLLM.worker.onmessage;
+                LocalLLM.worker.onmessage = function(e) {
+                    var d = e.data;
+                    if (d.type === 'token') {
+                        fullText += d.token;
+                    } else if (d.type === 'complete') {
+                        LocalLLM.worker.onmessage = prevHandler;
+                        self.setStatus('Listening');
+                        resolve({
+                            status: 200,
+                            body: {
+                                id: msgId,
+                                type: 'message',
+                                role: 'assistant',
+                                content: [{ type: 'text', text: fullText }],
+                                stop_reason: 'end_turn',
+                                model: localStorage.getItem('karkhana_local_model') || 'local',
+                            }
+                        });
+                    } else if (d.type === 'error') {
+                        LocalLLM.worker.onmessage = prevHandler;
+                        self.setStatus('Listening');
+                        resolve({ status: 500, body: { error: d.data } });
+                    }
+                };
+
+                LocalLLM.worker.postMessage({
+                    type: 'generate', messages: messages, id: msgId,
+                    maxTokens: body.max_tokens || 600
+                });
+            });
+        }
+    };
+
+    /* ═══════════════════════════════════════════════════
+       Settings panel logic
+       ═══════════════════════════════════════════════════ */
+    function initSettings() {
+        var panel = document.getElementById('k-settings');
+        var openBtn = document.getElementById('k-settings-btn');
+        var closeBtn = document.getElementById('k-settings-close');
+
+        openBtn.onclick = function() { panel.classList.add('open'); document.body.classList.add('settings-open'); localStorage.setItem('karkhana_settings_open', '1'); };
+        closeBtn.onclick = function() { panel.classList.remove('open'); document.body.classList.remove('settings-open'); localStorage.setItem('karkhana_settings_open', '0'); };
+
+        /* Restore saved settings panel state */
+        if (localStorage.getItem('karkhana_settings_open') === '1') {
+            panel.classList.add('open');
+            document.body.classList.add('settings-open');
+        }
+
+        /* ── Mode toggle (API / In-Browser) ── */
+        var modeBtns = panel.querySelectorAll('.chat-mode-btn');
+        var apiCfg = document.getElementById('k-api-cfg');
+        var localCfg = document.getElementById('k-local-cfg');
+        var savedMode = localStorage.getItem('karkhana_mode') || 'api';
+
+        function setMode(mode) {
+            localStorage.setItem('karkhana_mode', mode);
+            modeBtns.forEach(function(b) { b.classList.toggle('sel', b.dataset.mode === mode); });
+            apiCfg.style.display = mode === 'api' ? '' : 'none';
+            localCfg.style.display = mode === 'local' ? '' : 'none';
+        }
+        modeBtns.forEach(function(b) {
+            b.onclick = function() { setMode(b.dataset.mode); };
+        });
+        setMode(savedMode);
+
+        /* ── API preset chips ── */
+        var urlInput = document.getElementById('k-api-url');
+        var keyInput = document.getElementById('k-api-key');
+        var modelInput = document.getElementById('k-api-model');
+        var formatHint = document.getElementById('k-api-format-hint');
+
+        /* Restore saved values */
+        urlInput.value = localStorage.getItem('karkhana_api_url') || '';
+        keyInput.value = localStorage.getItem('karkhana_api_key') || '';
+        modelInput.value = localStorage.getItem('karkhana_api_model') || 'claude-sonnet-4-20250514';
+
+        function saveApiConfig() {
+            localStorage.setItem('karkhana_api_url', urlInput.value);
+            localStorage.setItem('karkhana_api_key', keyInput.value);
+            localStorage.setItem('karkhana_api_model', modelInput.value);
+            /* Push config to VM */
+            var emu = window.__karkhana_emulator;
+            if (emu) {
+                var cfg = getProviderConfig();
+                emu.Aj('/karkhana_provider.json', new TextEncoder().encode(JSON.stringify(cfg))).catch(function(){});
+            }
+        }
+        urlInput.onchange = saveApiConfig;
+        keyInput.onchange = saveApiConfig;
+        modelInput.onchange = saveApiConfig;
+
+        panel.querySelectorAll('.preset-btn').forEach(function(btn) {
+            btn.onclick = function() {
+                urlInput.value = btn.dataset.url;
+                localStorage.setItem('karkhana_api_format', btn.dataset.format);
+                localStorage.setItem('karkhana_api_url', btn.dataset.url);
+                formatHint.textContent = 'Format: ' + btn.dataset.format;
+                /* Highlight selected preset */
+                panel.querySelectorAll('.preset-btn').forEach(function(b) { b.classList.remove('sel'); });
+                btn.classList.add('sel');
+                /* Clear model for discovery */
+                if (btn.dataset.format !== 'anthropic') {
+                    modelInput.value = '';
+                    modelInput.placeholder = 'Click Discover Models';
+                }
+                saveApiConfig();
+            };
+        });
+
+        /* ── Model discovery ── */
+        var discoverBtn = document.getElementById('k-discover-models');
+        var modelList = document.getElementById('k-model-list');
+
+        discoverBtn.onclick = async function() {
+            var baseUrl = urlInput.value.replace(/\/+$/, '');
+            if (!baseUrl) return;
+            discoverBtn.textContent = 'Discovering\u2026';
+            discoverBtn.disabled = true;
+
+            var models = [];
+            var probeUrls = [baseUrl + '/models', baseUrl + '/v1/models', baseUrl + '/api/tags'];
+
+            for (var i = 0; i < probeUrls.length; i++) {
+                try {
+                    var headers = {};
+                    var key = keyInput.value.trim();
+                    if (key) headers = authHeader(localStorage.getItem('karkhana_api_format') || 'openai', key);
+                    var res = await fetch(probeUrls[i], { headers: headers, signal: AbortSignal.timeout(6000) });
+                    if (!res.ok) continue;
+                    var data = await res.json();
+                    if (Array.isArray(data.data)) models = data.data.map(function(m) { return m.id; }).filter(Boolean).sort();
+                    else if (Array.isArray(data.models)) models = data.models.map(function(m) { return m.name || m.id; }).filter(Boolean).sort();
+                    if (models.length) break;
+                } catch (e) {
+                    /* Try CORS detection */
+                    if (e instanceof TypeError) {
+                        try {
+                            var probe = await fetch(probeUrls[i], { mode: 'no-cors', signal: AbortSignal.timeout(3000) });
+                            if (probe.type === 'opaque') {
+                                formatHint.textContent = 'CORS blocked. For Ollama: OLLAMA_ORIGINS="*" ollama serve';
+                                break;
+                            }
+                        } catch (e2) { /* server not reachable */ }
+                    }
+                }
+            }
+
+            discoverBtn.textContent = 'Discover Models';
+            discoverBtn.disabled = false;
+
+            if (models.length === 0) {
+                formatHint.textContent = 'No models found at ' + baseUrl;
+                return;
+            }
+
+            formatHint.textContent = models.length + ' models found';
+            modelList.style.display = 'block';
+            modelList.innerHTML = models.map(function(m) {
+                return '<div style="padding:4px 8px;cursor:pointer;font-size:0.75rem;color:#aaa;border-bottom:1px solid #222;" data-model="' + m + '">' + m + '</div>';
+            }).join('');
+
+            modelList.querySelectorAll('div').forEach(function(el) {
+                el.onmouseenter = function() { el.style.color = '#ff6b35'; };
+                el.onmouseleave = function() { el.style.color = '#aaa'; };
+                el.onclick = function() {
+                    modelInput.value = el.dataset.model;
+                    modelList.style.display = 'none';
+                    saveApiConfig();
+                };
+            });
+        };
+
+        /* ── Local model (Transformers.js + WebGPU) ── */
+        var localStatus = document.getElementById('k-local-status');
+        var loadBtn = document.getElementById('k-load-model');
+        var progBar = document.getElementById('k-model-prog-bar');
+        var progWrap = document.getElementById('k-model-prog');
+        var modelSel = document.getElementById('k-local-model');
+
+        /* Auto-detect cached model */
+        var lastModel = localStorage.getItem('karkhana_local_model');
+        if (lastModel && LOCAL_MODELS[lastModel]) {
+            modelSel.value = lastModel;
+            isModelCached(LOCAL_MODELS[lastModel].id).then(function(cached) {
+                if (cached) localStatus.textContent = 'Cached \u2714 \u2014 click Load';
+                else localStatus.textContent = 'Not cached \u2014 will download on Load';
+            });
+        }
+
+        modelSel.onchange = function() {
+            var mdef = LOCAL_MODELS[modelSel.value];
+            if (mdef) {
+                isModelCached(mdef.id).then(function(cached) {
+                    localStatus.textContent = cached ? 'Cached \u2714' : 'Will download on Load';
+                    localStatus.style.color = cached ? '#2a6' : '#888';
+                });
+            }
+        };
+
+        loadBtn.onclick = function() {
+            if (LocalLLM.loading || LocalLLM.ready) return;
+            if (!navigator.gpu) { localStatus.textContent = 'WebGPU not supported \u2014 use API mode'; localStatus.style.color = '#e55'; return; }
+
+            var key = modelSel.value;
+            var mdef = LOCAL_MODELS[key];
+            if (!mdef) return;
+
+            LocalLLM.loading = true;
+            loadBtn.disabled = true;
+            modelSel.disabled = true;
+            progWrap.style.display = 'block';
+            localStatus.textContent = 'Starting\u2026';
+            localStatus.style.color = '#888';
+
+            if (LocalLLM.worker) LocalLLM.worker.terminate();
+            LocalLLM.worker = makeWorker(LLM_WORKER_SRC);
+
+            LocalLLM.worker.onmessage = function(e) {
+                var d = e.data;
+                if (d.type === 'progress') {
+                    var pct = d.data && d.data.progress != null ? Math.round(d.data.progress) : 0;
+                    progBar.style.width = pct + '%';
+                    if (pct > 0) localStatus.textContent = 'Loading\u2026 ' + pct + '%';
+                } else if (d.type === 'status') {
+                    localStatus.textContent = d.data;
+                } else if (d.type === 'ready') {
+                    LocalLLM.ready = true;
+                    LocalLLM.loading = false;
+                    localStorage.setItem('karkhana_local_model', key);
+                    localStatus.textContent = 'Model ready \u2714';
+                    localStatus.style.color = '#2a6';
+                    progWrap.style.display = 'none';
+                    loadBtn.textContent = 'Model Loaded';
+                } else if (d.type === 'error') {
+                    LocalLLM.loading = false;
+                    localStatus.textContent = 'Error: ' + d.data;
+                    localStatus.style.color = '#e55';
+                    progWrap.style.display = 'none';
+                    loadBtn.disabled = false;
+                    modelSel.disabled = false;
+                }
+            };
+
+            LocalLLM.worker.postMessage({ type: 'load', modelId: mdef.id, dtype: mdef.dtype });
+        };
+
+        /* ── MCP token display ── */
+        var tokenInput = document.getElementById('k-mcp-token');
+        var configPre = document.getElementById('k-mcp-config');
+
+        function refreshMCPUI() {
+            var token = getMCPToken();
+            tokenInput.value = token;
+            var origin = location.origin;
+            var config = JSON.stringify({
+                mcpServers: {
+                    karkhana: {
+                        type: 'http',
+                        url: origin + '/mcp',
+                        headers: { Authorization: 'Bearer ' + token }
+                    }
+                }
+            }, null, 2);
+            configPre.textContent = config;
+        }
+        refreshMCPUI();
+
+        document.getElementById('k-mcp-copy').onclick = function() {
+            navigator.clipboard.writeText(getMCPToken());
+            this.textContent = 'Copied!';
+            var btn = this;
+            setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+        };
+        document.getElementById('k-mcp-regen').onclick = function() {
+            localStorage.removeItem('karkhana_mcp_token');
+            refreshMCPUI();
+            /* Update SW cache */
+            caches.open('karkhana_config').then(function(c) { c.put('/mcp-token', new Response(getMCPToken())); });
+        };
+        configPre.onclick = function() {
+            navigator.clipboard.writeText(configPre.textContent);
+        };
+    }
+
+    /* ═══════════════════════════════════════════════════
+       Agent harness (Python script, injected into VM at boot)
+       ═══════════════════════════════════════════════════ */
+    var AGENT_HARNESS = [
+'#!/usr/bin/env python3',
+'import json, os, time, sys, sqlite3, datetime',
+'',
+'BRIDGE_REQ      = "/mnt/karkhana_req.json"',
+'BRIDGE_RES      = "/mnt/karkhana_res.json"',
+'PROVIDER_CONFIG = "/mnt/karkhana_provider.json"',
+'KARKHANA_DIR    = "/workspace/.karkhana"',
+'SKILLS_DIR      = KARKHANA_DIR + "/skills"',
+'MEMORY_FILE     = KARKHANA_DIR + "/MEMORY.md"',
+'SESSIONS_DB     = KARKHANA_DIR + "/sessions.db"',
+'MEMORY_CAP      = 3200',
+'',
+'def db_init():',
+'    os.makedirs(KARKHANA_DIR, exist_ok=True)',
+'    con = sqlite3.connect(SESSIONS_DB)',
+'    con.executescript("""',
+'        CREATE TABLE IF NOT EXISTS sessions (',
+'            id INTEGER PRIMARY KEY, ts TEXT NOT NULL,',
+'            summary TEXT, messages TEXT NOT NULL);',
+'        CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts',
+'            USING fts5(summary, messages, content=sessions, content_rowid=id);',
+'        CREATE TRIGGER IF NOT EXISTS sessions_ai AFTER INSERT ON sessions BEGIN',
+'            INSERT INTO sessions_fts(rowid, summary, messages)',
+'            VALUES (new.id, new.summary, new.messages); END;',
+'    """)',
+'    con.commit()',
+'    return con',
+'',
+'def db_save(con, messages, summary):',
+'    con.execute("INSERT INTO sessions(ts, summary, messages) VALUES(?,?,?)",',
+'        (datetime.datetime.now().isoformat(), summary, json.dumps(messages, ensure_ascii=False)))',
+'    con.commit()',
+'',
+'def db_search(con, query, n=3):',
+'    rows = con.execute(',
+'        "SELECT s.ts, s.summary, snippet(sessions_fts, 1, \'[\', \']\', \'...\', 32) "',
+'        "FROM sessions_fts f JOIN sessions s ON s.id = f.rowid "',
+'        "WHERE sessions_fts MATCH ? ORDER BY rank LIMIT ?", (query, n)).fetchall()',
+'    if not rows: return "No relevant past sessions found."',
+'    return "\\n\\n".join(f"[{ts[:10]}] {summary or \'(no summary)\'}\\n  ...{snip}..." for ts, summary, snip in rows)',
+'',
+'def load_memory():',
+'    if not os.path.exists(MEMORY_FILE): return ""',
+'    with open(MEMORY_FILE) as f: content = f.read()',
+'    if len(content) > MEMORY_CAP:',
+'        content = content[-MEMORY_CAP:]',
+'        content = content[content.index("\\n")+1:]',
+'    return content',
+'',
+'def update_memory(content):',
+'    os.makedirs(KARKHANA_DIR, exist_ok=True)',
+'    with open(MEMORY_FILE, "w") as f: f.write(content[:MEMORY_CAP])',
+'',
+'def skills_list():',
+'    if not os.path.exists(SKILLS_DIR): return "No skills saved yet."',
+'    out = []',
+'    for fn in sorted(os.listdir(SKILLS_DIR)):',
+'        if not fn.endswith(".md"): continue',
+'        with open(SKILLS_DIR + "/" + fn) as f: first = f.readline().strip().lstrip("#").strip()',
+'        out.append("- " + fn[:-3] + ": " + first)',
+'    return "\\n".join(out) if out else "No skills saved yet."',
+'',
+'def skill_view(name):',
+'    p = SKILLS_DIR + "/" + name + ".md"',
+'    if not os.path.exists(p): return "Skill \'%s\' not found." % name',
+'    with open(p) as f: return f.read()',
+'',
+'def skill_create(name, content):',
+'    os.makedirs(SKILLS_DIR, exist_ok=True)',
+'    slug = name.lower().replace(" ", "-")',
+'    with open(SKILLS_DIR + "/" + slug + ".md", "w") as f: f.write(content)',
+'    return "Skill created: " + slug',
+'',
+'def skill_patch(name, old_s, new_s):',
+'    p = SKILLS_DIR + "/" + name + ".md"',
+'    if not os.path.exists(p): return "Skill \'%s\' not found." % name',
+'    with open(p) as f: c = f.read()',
+'    if old_s not in c: return "String not found in skill \'%s\'." % name',
+'    with open(p, "w") as f: f.write(c.replace(old_s, new_s, 1))',
+'    return "Skill \'%s\' patched." % name',
+'',
+'def skill_delete(name):',
+'    p = SKILLS_DIR + "/" + name + ".md"',
+'    if os.path.exists(p): os.remove(p); return "Skill \'%s\' deleted." % name',
+'    return "Skill \'%s\' not found." % name',
+'',
+'SYSTEM_PROMPT = """You are Karkhana \u2014 a coding agent running inside a real Linux VM in the user\'s browser.',
+'Shell and filesystem at /workspace are real. The VM is emulated x86 Linux via v86.',
+'',
+'## Memory (always current)',
+'{memory}',
+'',
+'## Available skills',
+'{skills_index}',
+'Call skill_view(name) to load a skill\'s full content before using it.',
+'',
+'## Learning loop',
+'- After 5+ tool calls: save approach as a skill.',
+'- Wrong/incomplete skill: patch immediately.',
+'- User corrects you: patch the skill that misled you.',
+'- End of session: rewrite MEMORY.md (full replace, under 3200 chars).',
+'- Suspect prior context: call session_search first.',
+'"""',
+'',
+'TOOLS = [',
+'    {"name":"read_file","description":"Read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},',
+'    {"name":"write_file","description":"Write content to a file","input_schema":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}},',
+'    {"name":"run_command","description":"Execute a shell command","input_schema":{"type":"object","properties":{"command":{"type":"string"},"cwd":{"type":"string"}},"required":["command"]}},',
+'    {"name":"list_directory","description":"List directory contents","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},',
+'    {"name":"skills_list","description":"List saved skills","input_schema":{"type":"object","properties":{}}},',
+'    {"name":"skill_view","description":"Load full skill content","input_schema":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}},',
+'    {"name":"skill_create","description":"Create a new skill","input_schema":{"type":"object","properties":{"name":{"type":"string"},"content":{"type":"string"}},"required":["name","content"]}},',
+'    {"name":"skill_patch","description":"Patch an existing skill","input_schema":{"type":"object","properties":{"name":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"}},"required":["name","old_string","new_string"]}},',
+'    {"name":"skill_delete","description":"Delete a skill","input_schema":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}},',
+'    {"name":"update_memory","description":"Rewrite MEMORY.md entirely","input_schema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}},',
+'    {"name":"session_search","description":"Search past sessions","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}},',
+']',
+'',
+'def get_provider():',
+'    if os.path.exists(PROVIDER_CONFIG):',
+'        with open(PROVIDER_CONFIG) as f: return json.load(f)',
+'    return {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}',
+'',
+'def llm_call(messages):',
+'    memory = load_memory()',
+'    skills = skills_list()',
+'    system = SYSTEM_PROMPT.format(memory=memory or "Nothing saved yet.", skills_index=skills)',
+'    cfg = get_provider()',
+'    req = {"provider": cfg["provider"], "path": "/v1/messages", "method": "POST",',
+'           "headers": {"content-type": "application/json"},',
+'           "body": json.dumps({"model": cfg["model"], "max_tokens": 4096,',
+'                               "system": system, "tools": TOOLS, "messages": messages})}',
+'    # Clean up old files',
+'    for f in [BRIDGE_REQ, BRIDGE_RES]:',
+'        try: os.remove(f)',
+'        except: pass',
+'    with open(BRIDGE_REQ, "w") as f: json.dump(req, f)',
+'    # Wait for response',
+'    for _ in range(300):  # 60s timeout',
+'        time.sleep(0.2)',
+'        if os.path.exists(BRIDGE_RES):',
+'            try:',
+'                with open(BRIDGE_RES) as f: res = json.load(f)',
+'                os.remove(BRIDGE_RES)',
+'                os.remove(BRIDGE_REQ)',
+'                return res.get("body", res)',
+'            except: pass',
+'    return {"error": "Bridge timeout"}',
+'',
+'def execute_tool(con, name, inp):',
+'    try:',
+'        if name == "read_file":',
+'            with open(inp["path"]) as f: return f.read()',
+'        elif name == "write_file":',
+'            os.makedirs(os.path.dirname(os.path.abspath(inp["path"])), exist_ok=True)',
+'            with open(inp["path"], "w") as f: f.write(inp["content"])',
+'            return "Written: " + inp["path"]',
+'        elif name == "run_command":',
+'            import subprocess',
+'            r = subprocess.run(inp["command"], shell=True, cwd=inp.get("cwd", "/workspace"),',
+'                               capture_output=True, text=True, timeout=60)',
+'            return (r.stdout + r.stderr)[:4000]',
+'        elif name == "list_directory":',
+'            return "\\n".join(sorted(os.listdir(inp["path"])))',
+'        elif name == "skills_list": return skills_list()',
+'        elif name == "skill_view": return skill_view(inp["name"])',
+'        elif name == "skill_create": return skill_create(inp["name"], inp["content"])',
+'        elif name == "skill_patch": return skill_patch(inp["name"], inp["old_string"], inp["new_string"])',
+'        elif name == "skill_delete": return skill_delete(inp["name"])',
+'        elif name == "update_memory": update_memory(inp["content"]); return "Memory updated."',
+'        elif name == "session_search": return db_search(con, inp["query"])',
+'    except Exception as e: return "Error: " + str(e)',
+'    return "Unknown tool: " + name',
+'',
+'def run(con, prompt):',
+'    messages = [{"role": "user", "content": prompt}]',
+'    full_text = []',
+'    while True:',
+'        response = llm_call(messages)',
+'        if "error" in response:',
+'            print("\\033[31mError: " + response["error"] + "\\033[0m")',
+'            break',
+'        stop = response.get("stop_reason")',
+'        for block in response.get("content", []):',
+'            if block["type"] == "text":',
+'                print(block["text"])',
+'                full_text.append(block["text"])',
+'        if stop == "end_turn": break',
+'        elif stop == "tool_use":',
+'            results = []',
+'            for block in response["content"]:',
+'                if block["type"] != "tool_use": continue',
+'                print("\\n\\033[33m[" + block["name"] + "]\\033[0m " + json.dumps(block["input"])[:120])',
+'                result = execute_tool(con, block["name"], block["input"])',
+'                print(result[:200] if result else "")',
+'                results.append({"type": "tool_result", "tool_use_id": block["id"], "content": result or ""})',
+'            messages.append({"role": "assistant", "content": response["content"]})',
+'            messages.append({"role": "user", "content": results})',
+'        else: break',
+'    db_save(con, messages, " ".join(full_text)[:300])',
+'',
+'if __name__ == "__main__":',
+'    con = db_init()',
+'    print("\\033[38;5;208mKarkhana / \\u0915\\u093e\\u0930\\u0916\\u093c\\u093e\\u0928\\u093e\\033[0m")',
+'    print("Type your request. Ctrl+C to exit.\\n")',
+'    while True:',
+'        try:',
+'            prompt = input("> ").strip()',
+'            if prompt: run(con, prompt)',
+'        except (KeyboardInterrupt, EOFError):',
+'            print("\\nExiting.")',
+'            break',
+    ].join('\n');
+
+    /* ═══════════════════════════════════════════════════
+       Serial command helper
+       ═══════════════════════════════════════════════════ */
+    function sendSerial(emu, text) {
+        if (!emu || !emu.v) return;
+        for (var i = 0; i < text.length; i++) {
+            emu.v.send('serial0-input', text.charCodeAt(i));
+        }
+    }
+
+    /* ═══════════════════════════════════════════════════
+       Toast notifications
+       ═══════════════════════════════════════════════════ */
+    function toast(msg, cls) {
+        var container = document.getElementById('k-toasts');
+        var el = document.createElement('div');
+        el.className = 'k-toast' + (cls ? ' ' + cls : '');
+        el.textContent = msg;
+        container.appendChild(el);
+        setTimeout(function() { el.style.opacity = '0'; el.style.transition = 'opacity 0.3s'; }, 2200);
+        setTimeout(function() { el.remove(); }, 2500);
+    }
+
+    /* ═══════════════════════════════════════════════════
+       Context menu
+       ═══════════════════════════════════════════════════ */
+    var ctxMenu = document.getElementById('k-ctx-menu');
+
+    function showCtxMenu(x, y, items) {
+        ctxMenu.innerHTML = items.map(function(it) {
+            if (it.sep) return '<div class="ctx-sep"></div>';
+            var cls = 'ctx-item' + (it.danger ? ' danger' : '');
+            return '<div class="' + cls + '" data-action="' + it.action + '">' + (it.icon || '') + ' ' + it.label + '</div>';
+        }).join('');
+        ctxMenu.style.left = Math.min(x, window.innerWidth - 160) + 'px';
+        ctxMenu.style.top = Math.min(y, window.innerHeight - items.length * 30) + 'px';
+        ctxMenu.style.display = 'block';
+
+        ctxMenu.querySelectorAll('.ctx-item').forEach(function(el) {
+            el.onclick = function() {
+                ctxMenu.style.display = 'none';
+                var action = el.dataset.action;
+                var handler = items.find(function(it) { return it.action === action; });
+                if (handler && handler.fn) handler.fn();
+            };
+        });
+    }
+
+    document.addEventListener('click', function() { ctxMenu.style.display = 'none'; });
+    document.addEventListener('contextmenu', function(e) {
+        if (!e.target.closest('#k-file-tree')) ctxMenu.style.display = 'none';
+    });
+
+    /* ═══════════════════════════════════════════════════
+       Keyboard shortcuts
+       ═══════════════════════════════════════════════════ */
+    document.addEventListener('keydown', function(e) {
+        /* Don't intercept when typing in inputs */
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+        var mod = e.ctrlKey || e.metaKey;
+
+        /* Ctrl/Cmd + B — toggle sidebar */
+        if (mod && e.key === 'b') {
+            e.preventDefault();
+            document.body.classList.toggle('sidebar-open');
+            localStorage.setItem('karkhana_sidebar_open', document.body.classList.contains('sidebar-open') ? '1' : '0');
+        }
+        /* Ctrl/Cmd + , — toggle settings */
+        if (mod && e.key === ',') {
+            e.preventDefault();
+            var panel = document.getElementById('k-settings');
+            var isOpen = panel.classList.contains('open');
+            panel.classList.toggle('open');
+            document.body.classList.toggle('settings-open');
+            localStorage.setItem('karkhana_settings_open', isOpen ? '0' : '1');
+        }
+        /* F1 — docs */
+        if (e.key === 'F1') {
+            e.preventDefault();
+            showDocs();
+        }
+        /* Escape — close panels */
+        if (e.key === 'Escape') {
+            ctxMenu.style.display = 'none';
+            var docs = document.getElementById('k-docs');
+            if (docs && docs.style.display !== 'none') {
+                docs.style.display = 'none';
+                if (!location.search.includes('profile=')) document.getElementById('k-landing').style.display = 'flex';
+            }
+        }
+    });
+
+    /* ═══════════════════════════════════════════════════
+       File browser sidebar
+       ═══════════════════════════════════════════════════ */
+    var FileBrowser = {
+        emu: null,
+        tree: null,
+        preview: null,
+        refreshTimer: null,
+
+        init: function(emu) {
+            this.emu = emu;
+            this.tree = document.getElementById('k-file-tree');
+            this.preview = document.getElementById('k-file-preview');
+            var self = this;
+
+            /* Toggle button */
+            document.getElementById('k-sidebar-toggle').onclick = function() {
+                document.body.classList.toggle('sidebar-open');
+                localStorage.setItem('karkhana_sidebar_open', document.body.classList.contains('sidebar-open') ? '1' : '0');
+                if (document.body.classList.contains('sidebar-open')) self.refresh();
+            };
+            document.getElementById('k-sidebar-close').onclick = function() {
+                document.body.classList.remove('sidebar-open');
+                localStorage.setItem('karkhana_sidebar_open', '0');
+            };
+
+            /* Restore saved state (default open on first visit) */
+            var savedSidebar = localStorage.getItem('karkhana_sidebar_open');
+            if (savedSidebar === null || savedSidebar === '1') {
+                document.body.classList.add('sidebar-open');
+                self.refresh();
+            }
+
+            /* Auto-refresh every 2s when visible */
+            this.refreshTimer = setInterval(function() {
+                if (document.body.classList.contains('sidebar-open')) self.refresh();
+            }, 2000);
+        },
+
+        refresh: async function() {
+            if (!this.emu) return;
+            try {
+                var data = await this.emu.Yf('/').catch(function() { return null; });
+                /* Yf returns file content, not listing. Use a shell command via serial instead. */
+                /* Alternative: scan known files from the 9P cache. For now, list via create_file trick. */
+                /* Simplest: we read the workspace storage scan if available */
+                if (WorkspaceStorage.root) {
+                    var files = await WorkspaceStorage.scan();
+                    this.renderTree(files);
+                }
+            } catch (e) { /* ignore */ }
+        },
+
+        renderTree: function(files) {
+            if (!this.tree) return;
+            var dirs = new Set();
+            files.forEach(function(f) {
+                var parts = f.path.split('/');
+                for (var i = 1; i < parts.length - 1; i++) {
+                    dirs.add(parts.slice(0, i + 1).join('/'));
+                }
+            });
+
+            var items = [];
+            /* Add directories */
+            Array.from(dirs).sort().forEach(function(d) {
+                var name = d.split('/').pop();
+                var depth = d.split('/').length - 2;
+                items.push({ path: d, name: name, isDir: true, depth: depth });
+            });
+            /* Add files */
+            files.sort(function(a, b) { return a.path.localeCompare(b.path); }).forEach(function(f) {
+                var name = f.path.split('/').pop();
+                var depth = f.path.split('/').length - 2;
+                items.push({ path: f.path, name: name, isDir: false, depth: depth, size: f.size });
+            });
+            /* Sort together by path */
+            items.sort(function(a, b) { return a.path.localeCompare(b.path); });
+
+            var self = this;
+            this.tree.innerHTML = items.map(function(it) {
+                var pad = 'padding-left:' + (12 + it.depth * 12) + 'px';
+                var icon = it.isDir ? '\u{1F4C1}' : '\u{1F4C4}';
+                var cls = 'ftree-item' + (it.isDir ? ' dir' : '');
+                var sizeStr = it.size ? ' <span style="color:#444;margin-left:auto;font-size:0.6rem;">' + (it.size > 1024 ? Math.round(it.size / 1024) + 'K' : it.size + 'B') + '</span>' : '';
+                return '<div class="' + cls + '" style="' + pad + '" data-path="' + it.path + '" data-dir="' + it.isDir + '"><span class="icon">' + icon + '</span>' + it.name + sizeStr + '</div>';
+            }).join('');
+
+            this.tree.querySelectorAll('.ftree-item:not(.dir)').forEach(function(el) {
+                el.onclick = function() { self.previewFile(el.dataset.path); };
+                el.oncontextmenu = function(e) {
+                    e.preventDefault();
+                    var path = el.dataset.path;
+                    showCtxMenu(e.clientX, e.clientY, [
+                        { label: 'Preview', icon: '\uD83D\uDC41', action: 'preview', fn: function() { self.previewFile(path); } },
+                        { label: 'Open in terminal', icon: '\u276F', action: 'cat', fn: function() {
+                            var emu = window.__karkhana_emulator;
+                            if (emu) sendSerial(emu, 'cat /workspace' + path + '\n');
+                            toast('cat /workspace' + path);
+                        }},
+                        { sep: true },
+                        { label: 'Download', icon: '\u2B07', action: 'download', fn: function() {
+                            WorkspaceStorage.readFile(path).then(function(info) {
+                                var blob = new Blob([info.data]);
+                                var a = document.createElement('a');
+                                a.href = URL.createObjectURL(blob);
+                                a.download = path.split('/').pop();
+                                a.click();
+                                URL.revokeObjectURL(a.href);
+                                toast('Downloaded ' + a.download, 'success');
+                            }).catch(function() { toast('Download failed', 'error'); });
+                        }},
+                        { sep: true },
+                        { label: 'Delete', icon: '\uD83D\uDDD1', action: 'delete', danger: true, fn: function() {
+                            WorkspaceStorage.writeFile(path, '').then(function() {
+                                toast('Deleted ' + path.split('/').pop());
+                                self.refresh();
+                            }).catch(function() { toast('Delete failed', 'error'); });
+                        }},
+                    ]);
+                };
+            });
+        },
+
+        previewFile: async function(path) {
+            if (!this.preview) return;
+            try {
+                var info = await WorkspaceStorage.readFile(path);
+                var text = new TextDecoder().decode(info.data);
+                this.preview.textContent = text.slice(0, 2000);
+                this.preview.style.display = 'block';
+            } catch (e) {
+                this.preview.textContent = 'Cannot read: ' + e.message;
+                this.preview.style.display = 'block';
+            }
+        }
+    };
+
+    /* ═══════════════════════════════════════════════════
+       window.karkhana JS API
+       ═══════════════════════════════════════════════════ */
+    /* ═══════════════════════════════════════════════════
+       Documentation overlay
+       ═══════════════════════════════════════════════════ */
+    function showDocs() {
+        var existing = document.getElementById('k-docs');
+        if (existing) { existing.style.display = 'flex'; return; }
+
+        var tabs = [
+            { id: 'overview', label: 'Overview' },
+            { id: 'features', label: 'Features' },
+            { id: 'keys', label: 'Shortcuts' },
+            { id: 'api', label: 'JS API' },
+            { id: 'arch', label: 'Architecture' },
+        ];
+
+        var panes = {
+            overview:
+                '<h3>What is Karkhana?</h3>'
+                + '<p>A real Linux VM running entirely in your browser tab. No server, no install, nothing leaves your device.</p>'
+                + '<p>Karkhana boots a Linux 6.8 kernel (i686) via v86 emulation, gives you a full shell, persists files to a folder on your machine, and connects to LLM APIs for AI coding assistance.</p>'
+                + '<h3>Quick Start</h3>'
+                + '<ol>'
+                + '<li>Click <b>Launch Karkhana</b> \u2014 Linux boots in ~15 seconds</li>'
+                + '<li>Type shell commands at the <code>~%</code> prompt</li>'
+                + '<li>Click <b>Open Workspace</b> to connect a host folder</li>'
+                + '<li>Files appear at <code>/workspace/</code> inside the VM</li>'
+                + '<li>Open <b>Settings</b> to configure an LLM provider</li>'
+                + '</ol>'
+                + '<h3>Limitations</h3>'
+                + '<ul>'
+                + '<li>No real networking \u2014 bridge proxies HTTP to LLM APIs only</li>'
+                + '<li>Cron jobs stop when the tab is closed</li>'
+                + '<li>~10 MB disk image download on first visit (cached after)</li>'
+                + '<li>Desktop browser only (Chrome recommended)</li>'
+                + '</ul>',
+
+            features:
+                '<h3>File System Access</h3>'
+                + '<p>Click <b>Open Workspace</b> in the bottom bar to pick a folder on your machine. Karkhana mounts it at <code>/workspace/</code> inside the VM via a 9P filesystem bridge. Changes sync bidirectionally \u2014 edit files on your host and they appear in the VM within 2 seconds, and vice versa.</p>'
+                + '<p>If you decline the folder picker, files are stored in browser-sandboxed OPFS storage instead.</p>'
+                + '<p>The workspace handle is saved \u2014 on your next visit, the folder reconnects automatically.</p>'
+
+                + '<h3>File Browser</h3>'
+                + '<p>Toggle with the <code>\u2261</code> hamburger button or <b>Ctrl+B</b>. Shows a tree view of <code>/workspace/</code>. Click a file to preview. Right-click for context menu: preview, open in terminal, download, delete.</p>'
+
+                + '<h3>LLM Providers</h3>'
+                + '<p>Open Settings to configure. Two modes:</p>'
+                + '<ul>'
+                + '<li><b>API mode</b> \u2014 BYOK (bring your own key). Presets for Anthropic, OpenRouter, OpenAI, LM Studio, Ollama. Supports model discovery.</li>'
+                + '<li><b>In-Browser mode</b> \u2014 Run a local model via WebGPU (Qwen 0.5B\u20131.5B, SmolLM 1.7B). No API key needed. First load downloads the model; cached after.</li>'
+                + '</ul>'
+                + '<p>The networking bridge routes LLM API calls from inside the VM through the browser\'s <code>fetch()</code>. API keys are injected by the bridge and never visible inside the VM.</p>'
+
+                + '<h3>MCP Server</h3>'
+                + '<p>External agents (Claude Code, Cursor) can connect to Karkhana as a sandboxed Linux environment. Open Settings \u2192 MCP Server to copy the config block. Only works while this tab is open.</p>'
+
+                + '<h3>Embed Mode</h3>'
+                + '<p>Load Karkhana in an iframe. The <code>postMessage</code> bridge mirrors the full JS API. Host page sends <code>{id, method, args}</code>, Karkhana replies with <code>{id, result}</code>.</p>'
+
+                + '<h3>Snapshot / Restore</h3>'
+                + '<p>Save the entire VM state with <code>karkhana.snapshot()</code> and restore it later with <code>karkhana.restore(blob)</code>. Useful for checkpointing long-running tasks.</p>',
+
+            keys:
+                '<h3>Keyboard Shortcuts</h3>'
+                + '<table style="width:100%;border-collapse:collapse;">'
+                + '<tr><td class="sc-key">Ctrl + B</td><td>Toggle file browser sidebar</td></tr>'
+                + '<tr><td class="sc-key">Ctrl + ,</td><td>Toggle settings panel</td></tr>'
+                + '<tr><td class="sc-key">F1</td><td>Open this help</td></tr>'
+                + '<tr><td class="sc-key">Escape</td><td>Close help / menus</td></tr>'
+                + '</table>'
+                + '<h3>Terminal</h3>'
+                + '<p>Click the terminal area to focus it. All keyboard input goes to the Linux shell. Standard shell shortcuts work: Ctrl+C (interrupt), Ctrl+D (EOF), Ctrl+L (clear), Tab (autocomplete), arrow keys (history).</p>'
+                + '<h3>File Browser</h3>'
+                + '<p>Left-click a file to preview. Right-click for context menu (preview, open in terminal, download, delete).</p>',
+
+            api:
+                '<h3>window.karkhana</h3>'
+                + '<p>Available after boot. Also accessible from iframes via postMessage.</p>'
+                + '<pre>'
+                + 'karkhana.isReady()              // boolean\n\n'
+                + '// File system\n'
+                + 'karkhana.fs.read(path)          // Promise&lt;string&gt;\n'
+                + 'karkhana.fs.write(path, content) // Promise&lt;void&gt;\n'
+                + 'karkhana.fs.list(path)          // Promise&lt;string[]&gt;\n'
+                + 'karkhana.fs.exists(path)        // Promise&lt;boolean&gt;\n'
+                + 'karkhana.fs.delete(path)        // Promise&lt;void&gt;\n\n'
+                + '// Shell\n'
+                + 'karkhana.shell.run(command)     // Promise&lt;{exitCode}&gt;\n\n'
+                + '// Config\n'
+                + 'karkhana.config.setProvider(url, key, model)\n'
+                + 'karkhana.config.getProvider()   // {provider, model, url}\n\n'
+                + '// State\n'
+                + 'karkhana.snapshot()             // Promise&lt;Blob&gt;\n'
+                + 'karkhana.restore(blob)          // Promise&lt;void&gt;'
+                + '</pre>'
+                + '<h3>Embed (iframe)</h3>'
+                + '<pre>'
+                + '&lt;iframe src="/?profile=buildroot6"&gt;&lt;/iframe&gt;\n\n'
+                + 'iframe.contentWindow.postMessage({\n'
+                + '  id: "req_001",\n'
+                + '  method: "shell.run",\n'
+                + '  args: { command: "uname -a" }\n'
+                + '}, "*");'
+                + '</pre>',
+
+            arch:
+                '<h3>Architecture</h3>'
+                + '<pre>'
+                + 'Browser tab\n'
+                + '  \u251C\u2500 v86 emulator (x86 Linux 6.8 kernel)\n'
+                + '  \u251C\u2500 xterm.js (serial console \u2194 VM shell)\n'
+                + '  \u251C\u2500 9P filesystem (VM /workspace \u2194 host files)\n'
+                + '  \u2502     \u2514\u2500 FSA (real folder) or OPFS (browser sandbox)\n'
+                + '  \u251C\u2500 Networking bridge (VM \u2192 fetch \u2192 LLM APIs)\n'
+                + '  \u2502     \u2514\u2500 Anthropic / OpenAI / Ollama / In-browser\n'
+                + '  \u251C\u2500 Agent harness (/usr/bin/agent)\n'
+                + '  \u251C\u2500 MCP Service Worker\n'
+                + '  \u2514\u2500 window.karkhana JS API + postMessage bridge'
+                + '</pre>'
+                + '<h3>How it works</h3>'
+                + '<p><b>Boot:</b> v86 loads a 10 MB bzImage (Linux 6.8 kernel + initramfs) from IndexedDB cache or CDN. Boots in ~15s. Serial console wired to xterm.js.</p>'
+                + '<p><b>Storage:</b> Browser JS runs a 9P filesystem server backed by the File System Access API. Mounted at <code>/mnt/</code> inside the VM, symlinked to <code>/workspace/</code>.</p>'
+                + '<p><b>Bridge:</b> Agent writes HTTP request JSON to <code>/mnt/karkhana_req.json</code>. Browser polls, fires <code>fetch()</code> to the LLM API (injecting BYOK key), writes response to <code>/mnt/karkhana_res.json</code>.</p>'
+                + '<p><b>MCP:</b> Service Worker intercepts <code>/mcp</code> requests and forwards to the page via BroadcastChannel. External agents get <code>run_command</code>, <code>read_file</code>, <code>write_file</code> tools.</p>'
+                + '<div style="margin-top:24px;padding-top:16px;border-top:1px solid #1a1a24;font-size:0.7rem;color:#444;">'
+                + 'Karkhana \u00B7 <a href="https://naklitechie.github.io/" style="color:#555;" target="_blank">@NakliTechie</a> \u00B7 <a href="https://github.com/NakliTechie/Karkhana" style="color:#555;" target="_blank">Source</a>'
+                + '</div>',
+        };
+
+        var overlay = document.createElement('div');
+        overlay.id = 'k-docs';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:200000;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;font-family:Inter,system-ui,sans-serif;';
+
+        var modal = document.createElement('div');
+        modal.style.cssText = 'background:#0c0c14;border:1px solid #1a1a24;border-radius:8px;width:90vw;max-width:680px;height:80vh;display:flex;flex-direction:column;overflow:hidden;';
+
+        /* Header */
+        var header = document.createElement('div');
+        header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:14px 20px 0;';
+        header.innerHTML = '<h2 style="font-weight:300;letter-spacing:0.06em;color:#fff;margin:0;font-size:1.1rem;">Karkhana</h2>'
+            + '<button id="k-docs-close" style="background:none;border:none;color:#666;font-size:1.3rem;cursor:pointer;">\u00D7</button>';
+        modal.appendChild(header);
+
+        /* Tabs */
+        var tabRow = document.createElement('div');
+        tabRow.style.cssText = 'display:flex;gap:0;padding:12px 20px 0;border-bottom:1px solid #1a1a24;';
+        tabs.forEach(function(t) {
+            var btn = document.createElement('button');
+            btn.textContent = t.label;
+            btn.dataset.tab = t.id;
+            btn.className = 'help-tab';
+            btn.style.cssText = 'background:none;border:none;border-bottom:2px solid transparent;padding:6px 14px;color:#888;font-size:0.78rem;cursor:pointer;transition:all 0.15s;font-family:inherit;';
+            tabRow.appendChild(btn);
+        });
+        modal.appendChild(tabRow);
+
+        /* Content */
+        var content = document.createElement('div');
+        content.style.cssText = 'flex:1;overflow-y:auto;padding:20px;color:#ccc;font-size:0.82rem;line-height:1.7;';
+        content.innerHTML = '<style>'
+            + '#k-docs h3{color:#ff6b35;font-size:0.85rem;font-weight:500;margin:20px 0 8px;}'
+            + '#k-docs h3:first-child{margin-top:0;}'
+            + '#k-docs p{color:#999;margin:6px 0;}'
+            + '#k-docs ul,#k-docs ol{color:#999;padding-left:20px;}'
+            + '#k-docs li{margin:4px 0;}'
+            + '#k-docs code{color:#ccc;background:#1a1a28;padding:1px 5px;border-radius:2px;font-size:0.8em;}'
+            + '#k-docs pre{font-size:0.7rem;color:#888;background:#0a0a12;padding:14px;border-radius:4px;overflow-x:auto;border:1px solid #1a1a24;line-height:1.5;margin:8px 0;}'
+            + '#k-docs table{width:100%;border-collapse:collapse;margin:8px 0;}'
+            + '#k-docs td{padding:6px 0;color:#999;font-size:0.8rem;border-bottom:1px solid #1a1a24;}'
+            + '#k-docs td.sc-key{color:#ff6b35;font-family:monospace;font-size:0.78rem;width:120px;}'
+            + '</style>';
+        modal.appendChild(content);
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        /* Tab switching */
+        function activateTab(id) {
+            tabRow.querySelectorAll('.help-tab').forEach(function(b) {
+                var active = b.dataset.tab === id;
+                b.style.borderBottomColor = active ? '#ff6b35' : 'transparent';
+                b.style.color = active ? '#fff' : '#888';
+            });
+            content.innerHTML = content.querySelector('style').outerHTML + (panes[id] || '');
+        }
+        tabRow.querySelectorAll('.help-tab').forEach(function(b) {
+            b.onclick = function() { activateTab(b.dataset.tab); };
+        });
+        activateTab('overview');
+
+        /* Close */
+        overlay.querySelector('#k-docs-close').onclick = function() {
+            overlay.style.display = 'none';
+            if (!location.search.includes('profile=')) {
+                document.getElementById('k-landing').style.display = 'flex';
+            }
+        };
+        overlay.onclick = function(e) { if (e.target === overlay) overlay.querySelector('#k-docs-close').click(); };
+    }
+
+    function initJSAPI(emu) {
+        var enc = new TextEncoder();
+        var dec = new TextDecoder();
+
+        var api = Object.freeze({
+            isReady: function() { return !!emu; },
+
+            fs: Object.freeze({
+                read: async function(path) {
+                    var data = await emu.Yf(path);
+                    return data ? dec.decode(data) : null;
+                },
+                write: async function(path, content) {
+                    await emu.Aj(path, enc.encode(content));
+                },
+                list: async function(path) {
+                    /* Use WorkspaceStorage if available, else return empty */
+                    if (WorkspaceStorage.root) {
+                        var files = await WorkspaceStorage.scan();
+                        return files.map(function(f) { return f.path; });
+                    }
+                    return [];
+                },
+                exists: async function(path) {
+                    try {
+                        var data = await emu.Yf(path);
+                        return data !== null && data !== undefined;
+                    } catch (e) { return false; }
+                },
+                delete: async function(path) {
+                    /* 9P doesn't support delete via Aj — overwrite with empty */
+                    await emu.Aj(path, new Uint8Array(0));
+                },
+            }),
+
+            shell: Object.freeze({
+                run: function(command) {
+                    return new Promise(function(resolve) {
+                        sendSerial(emu, command + '\n');
+                        /* Can't easily capture output via serial — resolve immediately */
+                        setTimeout(function() { resolve({ exitCode: 0 }); }, 100);
+                    });
+                },
+            }),
+
+            config: Object.freeze({
+                setProvider: function(url, key, model) {
+                    if (url) localStorage.setItem('karkhana_api_url', url);
+                    if (key) localStorage.setItem('karkhana_api_key', key);
+                    if (model) localStorage.setItem('karkhana_api_model', model);
+                    var cfg = getProviderConfig();
+                    emu.Aj('/karkhana_provider.json', enc.encode(JSON.stringify(cfg))).catch(function(){});
+                },
+                getProvider: function() { return getProviderConfig(); },
+            }),
+
+            snapshot: async function() {
+                return new Promise(function(resolve, reject) {
+                    /* v86 save_state is minified — find it */
+                    if (typeof emu.save_state === 'function') {
+                        emu.save_state(function(err, state) {
+                            if (err) reject(err);
+                            else resolve(new Blob([state]));
+                        });
+                    } else {
+                        /* Try minified name — scan for a function that accepts a callback */
+                        reject(new Error('save_state not available'));
+                    }
+                });
+            },
+
+            restore: async function(blob) {
+                var buf = await blob.arrayBuffer();
+                if (typeof emu.restore_state === 'function') {
+                    emu.restore_state(buf);
+                } else {
+                    throw new Error('restore_state not available');
+                }
+            },
+        });
+
+        Object.defineProperty(window, 'karkhana', {
+            value: api, writable: false, configurable: true, enumerable: false
+        });
+        console.log('[Karkhana] JS API available at window.karkhana');
+    }
+
+    /* ═══════════════════════════════════════════════════
+       Embed mode (postMessage bridge)
+       ═══════════════════════════════════════════════════ */
+    function initEmbedBridge() {
+        if (window === window.parent) return; /* not in iframe */
+
+        window.addEventListener('message', async function(e) {
+            if (!e.data || !e.data.id || !e.data.method) return;
+            var api = window.karkhana;
+            if (!api) { e.source.postMessage({ id: e.data.id, error: 'not_ready' }, '*'); return; }
+
+            var result = null;
+            var error = null;
+            try {
+                var m = e.data.method;
+                var a = e.data.args || {};
+                if (m === 'fs.read') result = await api.fs.read(a.path);
+                else if (m === 'fs.write') { await api.fs.write(a.path, a.content); result = true; }
+                else if (m === 'fs.list') result = await api.fs.list(a.path);
+                else if (m === 'fs.exists') result = await api.fs.exists(a.path);
+                else if (m === 'fs.delete') { await api.fs.delete(a.path); result = true; }
+                else if (m === 'shell.run') result = await api.shell.run(a.command);
+                else if (m === 'config.setProvider') { api.config.setProvider(a.url, a.key, a.model); result = true; }
+                else if (m === 'config.getProvider') result = api.config.getProvider();
+                else if (m === 'isReady') result = api.isReady();
+                else error = 'unknown_method';
+            } catch (ex) {
+                error = ex.message;
+            }
+            e.source.postMessage({ id: e.data.id, result: result, error: error }, '*');
+        });
+
+        /* Signal readiness */
+        window.parent.postMessage({ type: 'karkhana:ready' }, '*');
+        console.log('[Karkhana] Embed bridge active');
+    }
+
+    /* ═══════════════════════════════════════════════════
+       MCP Service Worker + page-side handler
+       ═══════════════════════════════════════════════════ */
+    function getMCPToken() {
+        var token = localStorage.getItem('karkhana_mcp_token');
+        if (!token) {
+            var arr = new Uint8Array(24);
+            crypto.getRandomValues(arr);
+            token = Array.from(arr, function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+            localStorage.setItem('karkhana_mcp_token', token);
+        }
+        return token;
+    }
+
+    function initMCP(emu) {
+        /* Register Service Worker */
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('mcp-sw.js', { scope: '/' }).then(function() {
+                /* Store token in Cache Storage so SW can read it */
+                caches.open('karkhana_config').then(function(cache) {
+                    cache.put('/mcp-token', new Response(getMCPToken()));
+                });
+                console.log('[Karkhana] MCP Service Worker registered');
+            }).catch(function(e) {
+                console.warn('[Karkhana] MCP SW registration failed:', e.message);
+            });
+        }
+
+        /* Listen for MCP requests from the Service Worker */
+        var channel = new BroadcastChannel('karkhana_mcp');
+        var enc = new TextEncoder();
+        var dec = new TextDecoder();
+
+        channel.addEventListener('message', async function(event) {
+            var reqId = event.data.reqId;
+            var body = event.data.body;
+            if (!reqId) return;
+
+            var result = {};
+            try {
+                var method = body.method;
+                var params = body.params || {};
+
+                if (method === 'karkhana.read_file') {
+                    var data = await emu.Yf(params.path);
+                    result = { content: data ? dec.decode(data) : '', size: data ? data.length : 0 };
+                } else if (method === 'karkhana.write_file') {
+                    await emu.Aj(params.path, enc.encode(params.content));
+                    result = { success: true };
+                } else if (method === 'karkhana.list_directory') {
+                    if (WorkspaceStorage.root) {
+                        var files = await WorkspaceStorage.scan();
+                        result = { entries: files.map(function(f) { return { name: f.path, type: 'file', size: f.size }; }) };
+                    } else { result = { entries: [] }; }
+                } else if (method === 'karkhana.run_command') {
+                    sendSerial(emu, (params.command || '') + '\n');
+                    result = { stdout: '', stderr: '', exit_code: 0 };
+                } else if (method === 'karkhana.delete_file') {
+                    await emu.Aj(params.path, new Uint8Array(0));
+                    result = { success: true };
+                } else {
+                    result = { error: 'unknown method: ' + method };
+                }
+            } catch (e) {
+                result = { error: e.message };
+            }
+
+            channel.postMessage({ reqId: reqId, result: result });
+        });
+    }
+
+    /* ═══════════════════════════════════════════════════
+       Boot detection + M2 initialization
+       ═══════════════════════════════════════════════════ */
+    var bar = document.getElementById('k-bar');
+    var status = document.getElementById('k-status');
+    var overlay = document.getElementById('karkhana-boot');
+    var wsBar = document.getElementById('k-workspace-bar');
+    var wsBtn = document.getElementById('k-workspace-btn');
+
+    function onBoot() {
+        bar.style.width = '100%';
+        status.textContent = 'Ready';
+        setTimeout(function() {
+            overlay.classList.add('hidden');
+            setTimeout(function() { overlay.remove(); }, 600);
+        }, 300);
+        document.title = 'Karkhana / \u0915\u093E\u0930\u0916\u093C\u093E\u0928\u093E';
+        console.log('[Karkhana] VM ready');
+        toast('Linux VM ready', 'success');
+
+        /* Create /workspace symlink + install agent harness */
+        var emu = window.__karkhana_emulator;
+        if (emu) {
+            /* Write agent harness to 9P, then install via serial */
+            var agentScript = AGENT_HARNESS;
+            var agentBytes = new TextEncoder().encode(agentScript);
+            emu.Aj('/agent', agentBytes).then(function() {
+                console.log('[Karkhana] Agent harness written to 9P');
+                setTimeout(function() {
+                    sendSerial(emu, 'ln -sf /mnt /workspace 2>/dev/null; cp /mnt/agent /usr/bin/agent; chmod +x /usr/bin/agent\n');
+                    console.log('[Karkhana] Agent installed');
+                }, 500);
+            }).catch(function(e) {
+                console.warn('[Karkhana] Agent install failed:', e);
+                setTimeout(function() {
+                    sendSerial(emu, 'ln -sf /mnt /workspace 2>/dev/null\n');
+                }, 500);
+            });
+        }
+
+        /* Show workspace bar */
+        wsBar.style.display = 'flex';
+
+        /* Start networking bridge */
+        if (emu) {
+            Bridge.start(emu);
+        }
+
+        /* Init settings panel */
+        initSettings();
+
+        /* Init JS API */
+        if (emu) {
+            initJSAPI(emu);
+            FileBrowser.init(emu);
+        }
+
+        /* Help button */
+        document.getElementById('k-help-btn').onclick = function() { showDocs(); };
+
+        /* Init embed bridge + MCP */
+        initEmbedBridge();
+        if (emu) initMCP(emu);
+
+        /* Try to auto-restore saved workspace */
+        WorkspaceStorage.tryRestore().then(function(ok) {
+            if (ok && emu) {
+                wsBtn.textContent = WorkspaceStorage.name + ' (synced)';
+                wsBtn.classList.add('active');
+                SyncEngine.start(emu, WorkspaceStorage);
+                FileBrowser.refresh();
+                toast('Workspace: ' + WorkspaceStorage.name, 'success');
+            }
+        });
+    }
+
+    /* Wire workspace button */
+    wsBtn.onclick = async function() {
+        var ok = await WorkspaceStorage.pick();
+        if (!ok) return;
+        var emu = window.__karkhana_emulator;
+        if (!emu) { console.error('[Karkhana] No emulator'); return; }
+        wsBtn.textContent = WorkspaceStorage.name + ' (syncing\u2026)';
+        wsBtn.classList.add('active');
+        SyncEngine.start(emu, WorkspaceStorage);
+        wsBtn.textContent = WorkspaceStorage.name + ' (synced)';
+    };
+
+    /* Poll for serial xterm + shell prompt */
+    var check = setInterval(function() {
+        var xt = document.querySelector('#terminal .xterm');
+        if (!xt) return;
+
+        bar.style.width = '80%';
+        status.textContent = 'Booting\u2026';
+
+        var rows = xt.querySelector('.xterm-rows');
+        if (!rows) return;
+
+        var text = rows.textContent || '';
+        if (/[~%#$]\s*$/.test(text.trim()) && text.length > 50) {
+            clearInterval(check);
+            onBoot();
+        }
+    }, 500);
+
+    /* Timeout fallback */
+    setTimeout(function() {
+        if (document.querySelector('#terminal .xterm')) {
+            clearInterval(check);
+            onBoot();
+        }
+    }, 45000);
+})();
+</script>
