@@ -10,7 +10,22 @@
 
 <!-- Karkhana overrides -->
 <style>
-    html, body { background: #0a0a0f !important; margin: 0; overflow: hidden; height: 100%; }
+    /* Rangrez · westafrica-10 · ÒRUN — Yoruba night sky, kente gold, electric indigo */
+    :root {
+      --kk-body: #08081a;
+      --kk-panel: #14142a;
+      --kk-row: #1a1428;
+      --kk-line: #2a2040;
+      --kk-ink: #f0d2a0;
+      --kk-ink-mid: #c8a868;
+      --kk-ink-soft: #a89868;
+      --kk-ink-mute: #7a684c;
+      --kk-brand: #d83858;
+      --kk-act: #4a6ad8;
+      --kk-ok: #5aaa3a;
+      --kk-warn: #d8a868;
+    }
+    html, body { background: var(--kk-body) !important; margin: 0; overflow: hidden; height: 100%; }
 
     /* Hide ALL demo UI */
     #boot_options, #oses, #filter, .version-links,
@@ -21,17 +36,17 @@
     label[for], select { display: none !important; }
 
     /* ── Unified scrollbar styling ── */
-    * { scrollbar-width: thin; scrollbar-color: #1e1e2e transparent; }
+    * { scrollbar-width: thin; scrollbar-color: var(--kk-line) transparent; }
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #1e1e2e; border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: #2a2a3a; }
+    ::-webkit-scrollbar-thumb { background: var(--kk-line); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--kk-line); }
 
     /* Serial terminal fills the page — shifts when panels open */
     #terminal {
         position: fixed !important; top: 0 !important; right: 0 !important;
         bottom: 32px !important; left: 0 !important;
-        background: #0c0c14 !important;
+        background: var(--kk-panel) !important;
         padding: 4px !important;
         transition: left 0.2s ease, right 0.25s ease !important;
     }
@@ -42,56 +57,56 @@
     #k-sidebar {
         position: fixed; top: 0; left: -220px; width: 220px;
         height: calc(100vh - 32px); z-index: 99998;
-        background: #0c0c14; border-right: 1px solid #1a1a24;
+        background: var(--kk-panel); border-right: 1px solid var(--kk-line);
         font-family: 'Inter', system-ui, sans-serif;
         transition: left 0.2s ease; overflow: hidden;
         display: flex; flex-direction: column;
     }
     body.sidebar-open #k-sidebar { left: 0; }
     #k-sidebar-header {
-        padding: 10px 12px 8px; border-bottom: 1px solid #1a1a24;
+        padding: 10px 12px 8px; border-bottom: 1px solid var(--kk-line);
         display: flex; align-items: center; justify-content: space-between;
     }
-    #k-sidebar-header span { font-size: 0.75rem; color: #888; letter-spacing: 0.03em; }
+    #k-sidebar-header span { font-size: 0.75rem; color: var(--kk-ink-soft); letter-spacing: 0.03em; }
     #k-sidebar-header button {
-        background: none; border: none; color: #555; cursor: pointer;
+        background: none; border: none; color: var(--kk-ink-mute); cursor: pointer;
         font-size: 0.85rem; padding: 2px 4px;
     }
-    #k-sidebar-header button:hover { color: #ff6b35; }
+    #k-sidebar-header button:hover { color: var(--kk-brand); }
     #k-file-tree { flex: 1; overflow-y: auto; padding: 6px 0; }
     .ftree-item {
         display: flex; align-items: center; gap: 4px;
         padding: 3px 12px; cursor: pointer; font-size: 0.72rem;
-        color: #888; white-space: nowrap; overflow: hidden;
+        color: var(--kk-ink-soft); white-space: nowrap; overflow: hidden;
         text-overflow: ellipsis; transition: background 0.1s;
     }
-    .ftree-item:hover { background: #14141e; color: #ccc; }
-    .ftree-item.dir { color: #58a6ff; }
+    .ftree-item:hover { background: var(--kk-row); color: var(--kk-ink-mid); }
+    .ftree-item.dir { color: var(--kk-act); }
     .ftree-item .icon { width: 14px; text-align: center; flex-shrink: 0; font-size: 0.65rem; }
     #k-file-preview {
-        border-top: 1px solid #1a1a24; max-height: 200px;
+        border-top: 1px solid var(--kk-line); max-height: 200px;
         overflow-y: auto; padding: 8px; font-size: 0.7rem;
-        color: #666; font-family: monospace; white-space: pre-wrap;
+        color: var(--kk-ink-mute); font-family: monospace; white-space: pre-wrap;
         word-break: break-all; display: none;
     }
     #terminal .xterm { background: transparent !important; }
-    #terminal .xterm-viewport { background: #0c0c14 !important; }
+    #terminal .xterm-viewport { background: var(--kk-panel) !important; }
 
     /* Context menu */
     #k-ctx-menu {
         position: fixed; z-index: 200000; display: none;
-        background: #14141e; border: 1px solid #2a2a3a;
+        background: var(--kk-row); border: 1px solid var(--kk-line);
         border-radius: 4px; padding: 4px 0; min-width: 140px;
         box-shadow: 0 4px 16px rgba(0,0,0,0.5);
         font-family: 'Inter', system-ui, sans-serif;
     }
     #k-ctx-menu .ctx-item {
-        padding: 6px 14px; font-size: 0.73rem; color: #bbb;
+        padding: 6px 14px; font-size: 0.73rem; color: var(--kk-ink-mid);
         cursor: pointer; display: flex; align-items: center; gap: 8px;
     }
-    #k-ctx-menu .ctx-item:hover { background: #1e1e2e; color: #fff; }
-    #k-ctx-menu .ctx-item.danger:hover { background: #2a1515; color: #f66; }
-    #k-ctx-menu .ctx-sep { height: 1px; background: #1a1a24; margin: 3px 0; }
+    #k-ctx-menu .ctx-item:hover { background: var(--kk-line); color: var(--kk-ink); }
+    #k-ctx-menu .ctx-item.danger:hover { background: #3a1828; color: var(--kk-brand); }
+    #k-ctx-menu .ctx-sep { height: 1px; background: var(--kk-line); margin: 3px 0; }
 
     /* Toast notifications */
     #k-toasts {
@@ -101,16 +116,16 @@
         align-items: center; pointer-events: none;
     }
     .k-toast {
-        background: #14141e; border: 1px solid #2a2a3a;
+        background: var(--kk-row); border: 1px solid var(--kk-line);
         padding: 7px 18px; border-radius: 20px;
-        font-size: 0.78rem; color: #ccc;
+        font-size: 0.78rem; color: var(--kk-ink-mid);
         font-family: 'Inter', system-ui, sans-serif;
         box-shadow: 0 2px 12px rgba(0,0,0,0.4);
         animation: kToastIn 0.2s ease-out;
         pointer-events: auto;
     }
-    .k-toast.success { border-color: #2a6; color: #5d8; }
-    .k-toast.error { border-color: #a33; color: #f88; }
+    .k-toast.success { border-color: var(--kk-ok); color: var(--kk-ok); }
+    .k-toast.error { border-color: var(--kk-brand); color: var(--kk-brand); }
     @keyframes kToastIn {
         from { opacity: 0; transform: translateY(8px); }
         to   { opacity: 1; transform: translateY(0); }
@@ -120,34 +135,34 @@
     #karkhana-boot {
         position: fixed; inset: 0; display: flex;
         align-items: center; justify-content: center;
-        z-index: 999; background: #0a0a0f;
+        z-index: 999; background: var(--kk-body);
         font-family: 'Inter', system-ui, -apple-system, sans-serif;
-        color: #e0e0e0; transition: opacity 0.5s;
+        color: var(--kk-ink); transition: opacity 0.5s;
     }
     #karkhana-boot.hidden { opacity: 0; pointer-events: none; }
     #karkhana-boot .inner { text-align: center; }
     #karkhana-boot h1 {
         font-size: 3rem; font-weight: 300;
-        letter-spacing: 0.06em; color: #fff;
+        letter-spacing: 0.06em; color: var(--kk-ink);
         animation: kFadeUp 0.6s ease-out;
     }
     #karkhana-boot .hindi {
-        font-size: 1.15rem; color: #555;
+        font-size: 1.15rem; color: var(--kk-ink-mute);
         margin-top: 2px; letter-spacing: 0.02em;
         animation: kFadeUp 0.6s ease-out 0.1s both;
     }
     #karkhana-boot .status {
         margin-top: 36px; font-size: 0.85rem;
-        color: #555; letter-spacing: 0.02em;
+        color: var(--kk-ink-mute); letter-spacing: 0.02em;
     }
     #karkhana-boot .bar-wrap {
         width: 180px; height: 2px;
-        background: #1a1a24; border-radius: 1px;
+        background: var(--kk-line); border-radius: 1px;
         margin: 12px auto 0; overflow: hidden;
     }
     #karkhana-boot .bar {
         width: 30%; height: 100%;
-        background: #ff6b35; border-radius: 1px;
+        background: var(--kk-brand); border-radius: 1px;
         transition: width 0.3s ease;
     }
     @keyframes kFadeUp {
@@ -159,112 +174,112 @@
     #k-workspace-bar {
         position: fixed; bottom: 0; left: 0; right: 0;
         z-index: 99999; height: 32px;
-        background: #0c0c14; border-top: 1px solid #1a1a24;
+        background: var(--kk-panel); border-top: 1px solid var(--kk-line);
         display: flex; align-items: center; padding: 0 12px;
         font-family: 'Inter', system-ui, sans-serif;
     }
     #k-workspace-btn {
-        background: none; border: 1px solid #444;
-        color: #aaa; font-size: 0.75rem; cursor: pointer;
+        background: none; border: 1px solid var(--kk-line);
+        color: var(--kk-ink-soft); font-size: 0.75rem; cursor: pointer;
         padding: 3px 14px; border-radius: 3px;
         transition: all 0.2s;
     }
-    #k-workspace-btn:hover { border-color: #ff6b35; color: #ff6b35; }
-    #k-workspace-btn.active { border-color: #2a6; color: #2a6; }
+    #k-workspace-btn:hover { border-color: var(--kk-brand); color: var(--kk-brand); }
+    #k-workspace-btn.active { border-color: var(--kk-ok); color: var(--kk-ok); }
     .vm-btn {
-        background: none; border: none; color: #555;
+        background: none; border: none; color: var(--kk-ink-mute);
         font-size: 0.75rem; cursor: pointer; padding: 2px 5px;
         border-radius: 2px; transition: color 0.15s;
     }
-    .vm-btn:hover { color: #ff6b35; }
-    .vm-btn.active { color: #fa0; }
+    .vm-btn:hover { color: var(--kk-brand); }
+    .vm-btn.active { color: var(--kk-warn); }
     #k-settings-btn {
-        background: none; border: none; color: #666;
+        background: none; border: none; color: var(--kk-ink-mute);
         font-size: 0.85rem; cursor: pointer; margin-left: auto;
         padding: 3px 10px; transition: color 0.2s;
     }
-    #k-settings-btn:hover { color: #ff6b35; }
+    #k-settings-btn:hover { color: var(--kk-brand); }
     #k-bridge-dot {
         width: 6px; height: 6px; border-radius: 50%;
-        background: #333; margin-left: 8px; margin-right: 4px;
+        background: var(--kk-line); margin-left: 8px; margin-right: 4px;
         transition: background 0.3s;
     }
-    #k-bridge-dot.active { background: #2a6; }
-    #k-bridge-dot.busy { background: #fa0; }
+    #k-bridge-dot.active { background: var(--kk-ok); }
+    #k-bridge-dot.busy { background: var(--kk-warn); }
 
     /* Settings panel */
     #k-settings {
         position: fixed; top: 0; right: -340px; width: 320px;
-        height: calc(100vh - 32px); z-index: 99999; background: #0c0c14;
-        border-left: 1px solid #1a1a24; padding: 20px;
+        height: calc(100vh - 32px); z-index: 99999; background: var(--kk-panel);
+        border-left: 1px solid var(--kk-line); padding: 20px;
         font-family: 'Inter', system-ui, sans-serif;
         transition: right 0.25s ease; overflow-y: auto;
     }
     #k-settings.open { right: 0; }
-    #k-settings h3 { font-size: 0.85rem; font-weight: 500; color: #ccc; margin: 0 0 16px; }
+    #k-settings h3 { font-size: 0.85rem; font-weight: 500; color: var(--kk-ink-mid); margin: 0 0 16px; }
     #k-settings label {
-        display: block; font-size: 0.75rem; color: #888;
+        display: block; font-size: 0.75rem; color: var(--kk-ink-soft);
         margin: 12px 0 4px; letter-spacing: 0.02em;
     }
     #k-settings input[type=password], #k-settings input[type=text] {
-        width: 100%; padding: 6px 8px; background: #1a1a28;
-        border: 1px solid #333; border-radius: 3px;
-        color: #ccc; font-size: 0.8rem; font-family: monospace;
+        width: 100%; padding: 6px 8px; background: var(--kk-row);
+        border: 1px solid var(--kk-line); border-radius: 3px;
+        color: var(--kk-ink-mid); font-size: 0.8rem; font-family: monospace;
     }
-    #k-settings input:focus { border-color: #ff6b35; outline: none; }
+    #k-settings input:focus { border-color: var(--kk-brand); outline: none; }
     #k-settings .provider-row {
         display: flex; gap: 6px; margin: 8px 0 16px;
     }
     #k-settings .provider-row button {
-        flex: 1; padding: 5px 0; background: #1a1a28;
-        border: 1px solid #333; border-radius: 3px;
-        color: #888; font-size: 0.7rem; cursor: pointer;
+        flex: 1; padding: 5px 0; background: var(--kk-row);
+        border: 1px solid var(--kk-line); border-radius: 3px;
+        color: var(--kk-ink-soft); font-size: 0.7rem; cursor: pointer;
         transition: all 0.15s;
     }
     #k-settings .provider-row button.sel {
-        border-color: #ff6b35; color: #ff6b35; background: #1f1518;
+        border-color: var(--kk-brand); color: var(--kk-brand); background: #2a1828;
     }
     #k-settings .close-btn {
         position: absolute; top: 12px; right: 14px;
-        background: none; border: none; color: #666;
+        background: none; border: none; color: var(--kk-ink-mute);
         font-size: 1.1rem; cursor: pointer;
     }
-    #k-settings .close-btn:hover { color: #fff; }
-    #k-settings .hint { font-size: 0.65rem; color: #555; margin-top: 4px; }
+    #k-settings .close-btn:hover { color: var(--kk-ink); }
+    #k-settings .hint { font-size: 0.65rem; color: var(--kk-ink-mute); margin-top: 4px; }
     #k-settings .k-section {
-        border-top: 1px solid #1a1a24; margin-top: 12px; padding-top: 4px;
+        border-top: 1px solid var(--kk-line); margin-top: 12px; padding-top: 4px;
     }
     #k-settings .k-section summary {
-        font-size: 0.78rem; color: #aaa; cursor: pointer;
+        font-size: 0.78rem; color: var(--kk-ink-soft); cursor: pointer;
         padding: 6px 0; list-style: none; display: flex;
         align-items: center; gap: 6px; user-select: none;
     }
     #k-settings .k-section summary::-webkit-details-marker { display: none; }
     #k-settings .k-section summary::before {
-        content: '\25B6'; font-size: 0.55rem; color: #555;
+        content: '\25B6'; font-size: 0.55rem; color: var(--kk-ink-mute);
         transition: transform 0.15s;
     }
     #k-settings .k-section[open] > summary::before { transform: rotate(90deg); }
-    #k-settings .k-section summary:hover { color: #ff6b35; }
+    #k-settings .k-section summary:hover { color: var(--kk-brand); }
     #k-settings .k-section > :not(summary) { padding-left: 2px; }
 
     /* Landing page */
     #k-landing {
         position: fixed; inset: 0; z-index: 100000;
-        background: #0a0a0f; display: flex;
+        background: var(--kk-body); display: flex;
         flex-direction: column; align-items: center;
         justify-content: center; text-align: center;
         font-family: 'Inter', system-ui, -apple-system, sans-serif;
-        color: #e0e0e0;
+        color: var(--kk-ink);
     }
     #k-landing h1 {
         font-size: 4rem; font-weight: 200;
-        letter-spacing: 0.08em; color: #fff;
+        letter-spacing: 0.08em; color: var(--kk-ink);
         margin-bottom: 4px;
     }
-    #k-landing .hindi { font-size: 1.3rem; color: #555; letter-spacing: 0.03em; }
+    #k-landing .hindi { font-size: 1.3rem; color: var(--kk-ink-mute); letter-spacing: 0.03em; }
     #k-landing .tagline {
-        margin-top: 28px; font-size: 1rem; color: #888;
+        margin-top: 28px; font-size: 1rem; color: var(--kk-ink-soft);
         max-width: 460px; line-height: 1.6;
     }
     #k-landing .features {
@@ -272,41 +287,41 @@
         flex-wrap: wrap; justify-content: center;
     }
     #k-landing .feat {
-        font-size: 0.75rem; color: #666; padding: 6px 16px;
-        border: 1px solid #1a1a24; border-radius: 20px;
+        font-size: 0.75rem; color: var(--kk-ink-mute); padding: 6px 16px;
+        border: 1px solid var(--kk-line); border-radius: 20px;
     }
     #k-landing .launch-btn {
         margin-top: 40px; padding: 12px 48px;
-        background: transparent; border: 1px solid #ff6b35;
-        color: #ff6b35; border-radius: 4px; cursor: pointer;
+        background: transparent; border: 1px solid var(--kk-brand);
+        color: var(--kk-brand); border-radius: 4px; cursor: pointer;
         font-size: 1rem; letter-spacing: 0.04em;
         transition: all 0.2s; font-family: inherit;
     }
-    #k-landing .launch-btn:hover { background: #ff6b35; color: #0a0a0f; }
+    #k-landing .launch-btn:hover { background: var(--kk-brand); color: var(--kk-body); }
     #k-landing .docs-link {
         margin-top: 16px; font-size: 0.75rem;
-        color: #555; cursor: pointer; text-decoration: underline;
+        color: var(--kk-ink-mute); cursor: pointer; text-decoration: underline;
         text-underline-offset: 3px;
     }
-    #k-landing .docs-link:hover { color: #888; }
+    #k-landing .docs-link:hover { color: var(--kk-ink-soft); }
     #k-landing .credit {
         position: absolute; bottom: 20px;
-        font-size: 0.65rem; color: #333;
+        font-size: 0.65rem; color: var(--kk-ink-mute);
     }
-    #k-landing .credit a { color: #444; text-decoration: none; }
-    #k-landing .credit a:hover { color: #ff6b35; }
+    #k-landing .credit a { color: var(--kk-line); text-decoration: none; }
+    #k-landing .credit a:hover { color: var(--kk-brand); }
 
     /* Mobile gate */
     @media (max-width: 768px) {
         #karkhana-boot .inner::after {
             content: 'Desktop browser required';
             display: block; margin-top: 24px;
-            color: #555; font-size: 0.9rem;
+            color: var(--kk-ink-mute); font-size: 0.9rem;
         }
         #k-landing .launch-btn { display: none; }
         #k-landing .tagline::after {
             content: 'Desktop browser required.';
-            display: block; margin-top: 16px; color: #e55; font-size: 0.85rem;
+            display: block; margin-top: 16px; color: var(--kk-brand); font-size: 0.85rem;
         }
     }
 </style>
@@ -750,16 +765,16 @@
 
 <!-- Karkhana bottom bar — must be AFTER #terminal in DOM to stack above xterm canvases -->
 <div id="k-workspace-bar" style="display:none;">
-    <button id="k-sidebar-toggle" style="background:none;border:none;color:#666;font-size:0.85rem;cursor:pointer;padding:3px 6px;margin-right:6px;" title="File browser">&#9776;</button>
+    <button id="k-sidebar-toggle" style="background:none;border:none;color:var(--kk-ink-mute);font-size:0.85rem;cursor:pointer;padding:3px 6px;margin-right:6px;" title="File browser">&#9776;</button>
     <button id="k-workspace-btn">Open Workspace</button>
     <div id="k-bridge-dot" title="Bridge idle"></div>
-    <div style="display:flex;gap:2px;margin-left:8px;border-left:1px solid #1a1a24;padding-left:8px;" id="k-vm-controls">
+    <div style="display:flex;gap:2px;margin-left:8px;border-left:1px solid var(--kk-line);padding-left:8px;" id="k-vm-controls">
         <button class="vm-btn" id="k-vm-pause" title="Pause/Resume VM">&#9208;</button>
         <button class="vm-btn" id="k-vm-save" title="Save state">&#128190;</button>
         <button class="vm-btn" id="k-vm-load" title="Load state">&#128194;</button>
         <button class="vm-btn" id="k-vm-reset" title="Reset VM">&#8635;</button>
     </div>
-    <button id="k-help-btn" style="background:none;border:none;color:#555;font-size:0.85rem;cursor:pointer;padding:3px 8px;margin-right:2px;" title="Help (F1)">?</button>
+    <button id="k-help-btn" style="background:none;border:none;color:var(--kk-ink-mute);font-size:0.85rem;cursor:pointer;padding:3px 8px;margin-right:2px;" title="Help (F1)">?</button>
     <button id="k-settings-btn">&#9881; Settings</button>
 </div>
 
@@ -790,9 +805,9 @@
             <input type="password" id="k-api-key" placeholder="sk-...">
             <label>Model</label>
             <input type="text" id="k-api-model" placeholder="claude-sonnet-4-20250514" value="claude-sonnet-4-20250514">
-            <button id="k-discover-models" style="margin-top:4px;padding:3px 10px;font-size:0.7rem;background:none;border:1px solid #333;color:#888;border-radius:3px;cursor:pointer;">Discover Models</button>
-            <div id="k-model-list" style="display:none;margin-top:4px;border:1px solid #333;border-radius:3px;background:#1a1a28;">
-                <input id="k-model-search" type="text" placeholder="Search models..." style="width:100%;padding:5px 8px;background:#12121c;border:none;border-bottom:1px solid #333;color:#ccc;font-size:0.72rem;box-sizing:border-box;">
+            <button id="k-discover-models" style="margin-top:4px;padding:3px 10px;font-size:0.7rem;background:none;border:1px solid #333;color:var(--kk-ink-soft);border-radius:3px;cursor:pointer;">Discover Models</button>
+            <div id="k-model-list" style="display:none;margin-top:4px;border:1px solid #333;border-radius:3px;background:var(--kk-row);">
+                <input id="k-model-search" type="text" placeholder="Search models..." style="width:100%;padding:5px 8px;background:var(--kk-row);border:none;border-bottom:1px solid #333;color:var(--kk-ink-mid);font-size:0.72rem;box-sizing:border-box;">
                 <div id="k-model-items" style="max-height:150px;overflow-y:auto;"></div>
             </div>
             <div class="hint">Keys stored in your browser only. Never sent to any server.</div>
@@ -801,18 +816,18 @@
 
         <div id="k-local-cfg" style="display:none">
             <label>In-Browser Model (WebGPU)</label>
-            <select id="k-local-model" style="width:100%;padding:6px 8px;background:#1a1a28;border:1px solid #333;border-radius:3px;color:#ccc;font-size:0.8rem;">
+            <select id="k-local-model" style="width:100%;padding:6px 8px;background:var(--kk-row);border:1px solid #333;border-radius:3px;color:var(--kk-ink-mid);font-size:0.8rem;">
                 <option value="qwen-0.5b">Qwen 2.5 0.5B (smallest, fast)</option>
                 <option value="smollm-1.7b">SmolLM2 1.7B</option>
                 <option value="qwen-1.5b">Qwen 2.5 1.5B</option>
             </select>
             <button id="k-load-model" style="margin-top:8px;padding:5px 16px;font-size:0.75rem;background:none;border:1px solid #444;color:#aaa;border-radius:3px;cursor:pointer;width:100%;">Load Model</button>
             <div id="k-model-prog" style="display:none;margin-top:6px;">
-                <div style="width:100%;height:3px;background:#1a1a24;border-radius:2px;overflow:hidden;">
-                    <div id="k-model-prog-bar" style="width:0;height:100%;background:#ff6b35;border-radius:2px;transition:width 0.12s;"></div>
+                <div style="width:100%;height:3px;background:var(--kk-line);border-radius:2px;overflow:hidden;">
+                    <div id="k-model-prog-bar" style="width:0;height:100%;background:var(--kk-brand);border-radius:2px;transition:width 0.12s;"></div>
                 </div>
             </div>
-            <div id="k-local-status" style="font-size:0.7rem;color:#555;margin-top:4px;"></div>
+            <div id="k-local-status" style="font-size:0.7rem;color:var(--kk-ink-mute);margin-top:4px;"></div>
             <div class="hint">Runs entirely in your browser via WebGPU. No API key needed.</div>
         </div>
     </details>
@@ -820,7 +835,7 @@
     <details class="k-section">
         <summary>Bridge</summary>
         <label>Status</label>
-        <div id="k-bridge-status" style="font-size:0.75rem;color:#666;">Idle</div>
+        <div id="k-bridge-status" style="font-size:0.75rem;color:var(--kk-ink-mute);">Idle</div>
     </details>
 
     <details class="k-section">
@@ -829,12 +844,12 @@
         <div class="hint" style="margin-top:6px;">&#9888; Cron jobs work inside the VM but stop when this tab is closed.</div>
         <label style="margin-top:8px;">Token</label>
         <div style="display:flex;gap:6px;align-items:center;">
-            <input type="text" id="k-mcp-token" readonly style="flex:1;font-size:0.7rem;color:#666;">
-            <button id="k-mcp-copy" style="background:none;border:1px solid #333;color:#888;padding:3px 8px;border-radius:3px;font-size:0.65rem;cursor:pointer;">Copy</button>
-            <button id="k-mcp-regen" style="background:none;border:1px solid #333;color:#888;padding:3px 8px;border-radius:3px;font-size:0.65rem;cursor:pointer;">Regen</button>
+            <input type="text" id="k-mcp-token" readonly style="flex:1;font-size:0.7rem;color:var(--kk-ink-mute);">
+            <button id="k-mcp-copy" style="background:none;border:1px solid #333;color:var(--kk-ink-soft);padding:3px 8px;border-radius:3px;font-size:0.65rem;cursor:pointer;">Copy</button>
+            <button id="k-mcp-regen" style="background:none;border:1px solid #333;color:var(--kk-ink-soft);padding:3px 8px;border-radius:3px;font-size:0.65rem;cursor:pointer;">Regen</button>
         </div>
         <label style="margin-top:8px;">Config (paste into claude_desktop_config.json)</label>
-        <pre id="k-mcp-config" style="font-size:0.6rem;color:#666;background:#1a1a28;padding:8px;border-radius:3px;overflow-x:auto;white-space:pre;margin-top:4px;border:1px solid #222;cursor:pointer;" title="Click to copy"></pre>
+        <pre id="k-mcp-config" style="font-size:0.6rem;color:var(--kk-ink-mute);background:var(--kk-row);padding:8px;border-radius:3px;overflow-x:auto;white-space:pre;margin-top:4px;border:1px solid #222;cursor:pointer;" title="Click to copy"></pre>
     </details>
 </div>
 
@@ -1542,10 +1557,10 @@
             function renderModels(filter) {
                 var filtered = filter ? models.filter(function(m) { return m.toLowerCase().includes(filter.toLowerCase()); }) : models;
                 modelItems.innerHTML = filtered.map(function(m) {
-                    return '<div style="padding:4px 8px;cursor:pointer;font-size:0.72rem;color:#aaa;border-bottom:1px solid #1a1a24;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" data-model="' + m + '">' + m + '</div>';
+                    return '<div style="padding:4px 8px;cursor:pointer;font-size:0.72rem;color:#aaa;border-bottom:1px solid var(--kk-line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" data-model="' + m + '">' + m + '</div>';
                 }).join('');
                 modelItems.querySelectorAll('div').forEach(function(el) {
-                    el.onmouseenter = function() { el.style.color = '#ff6b35'; el.style.background = '#14141e'; };
+                    el.onmouseenter = function() { el.style.color = 'var(--kk-brand)'; el.style.background = 'var(--kk-row)'; };
                     el.onmouseleave = function() { el.style.color = '#aaa'; el.style.background = ''; };
                     el.onclick = function() {
                         modelInput.value = el.dataset.model;
@@ -1585,7 +1600,7 @@
             if (mdef) {
                 isModelCached(mdef.id).then(function(cached) {
                     localStatus.textContent = cached ? 'Cached \u2714' : 'Will download on Load';
-                    localStatus.style.color = cached ? '#2a6' : '#888';
+                    localStatus.style.color = cached ? 'var(--kk-ok)' : 'var(--kk-ink-soft)';
                 });
             }
         };
@@ -1603,7 +1618,7 @@
             modelSel.disabled = true;
             progWrap.style.display = 'block';
             localStatus.textContent = 'Starting\u2026';
-            localStatus.style.color = '#888';
+            localStatus.style.color = 'var(--kk-ink-soft)';
 
             if (LocalLLM.worker) LocalLLM.worker.terminate();
             LocalLLM.worker = makeWorker(LLM_WORKER_SRC);
@@ -1621,7 +1636,7 @@
                     LocalLLM.loading = false;
                     localStorage.setItem('karkhana_local_model', key);
                     localStatus.textContent = 'Model ready \u2714';
-                    localStatus.style.color = '#2a6';
+                    localStatus.style.color = 'var(--kk-ok)';
                     progWrap.style.display = 'none';
                     loadBtn.textContent = 'Model Loaded';
                 } else if (d.type === 'error') {
@@ -2438,8 +2453,8 @@
                 + '<p><b>Storage:</b> Browser JS runs a 9P filesystem server backed by the File System Access API. Mounted at <code>/mnt/</code> inside the VM, symlinked to <code>/workspace/</code>.</p>'
                 + '<p><b>Bridge:</b> Agent writes HTTP request JSON to <code>/mnt/karkhana_req.json</code>. Browser polls, fires <code>fetch()</code> to the LLM API (injecting BYOK key), writes response to <code>/mnt/karkhana_res.json</code>.</p>'
                 + '<p><b>MCP:</b> Service Worker intercepts <code>/mcp</code> requests and forwards to the page via BroadcastChannel. External agents get <code>run_command</code>, <code>read_file</code>, <code>write_file</code> tools.</p>'
-                + '<div style="margin-top:24px;padding-top:16px;border-top:1px solid #1a1a24;font-size:0.7rem;color:#444;">'
-                + 'Karkhana \u00B7 <a href="https://naklitechie.github.io/" style="color:#555;" target="_blank">@NakliTechie</a> \u00B7 <a href="https://github.com/NakliTechie/Karkhana" style="color:#555;" target="_blank">Source</a>'
+                + '<div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--kk-line);font-size:0.7rem;color:#444;">'
+                + 'Karkhana \u00B7 <a href="https://naklitechie.github.io/" style="color:var(--kk-ink-mute);" target="_blank">@NakliTechie</a> \u00B7 <a href="https://github.com/NakliTechie/Karkhana" style="color:var(--kk-ink-mute);" target="_blank">Source</a>'
                 + '</div>',
         };
 
@@ -2448,42 +2463,42 @@
         overlay.style.cssText = 'position:fixed;inset:0;z-index:200000;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;font-family:Inter,system-ui,sans-serif;';
 
         var modal = document.createElement('div');
-        modal.style.cssText = 'background:#0c0c14;border:1px solid #1a1a24;border-radius:8px;width:90vw;max-width:680px;height:80vh;display:flex;flex-direction:column;overflow:hidden;';
+        modal.style.cssText = 'background:var(--kk-panel);border:1px solid var(--kk-line);border-radius:8px;width:90vw;max-width:680px;height:80vh;display:flex;flex-direction:column;overflow:hidden;';
 
         /* Header */
         var header = document.createElement('div');
         header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:14px 20px 0;';
         header.innerHTML = '<h2 style="font-weight:300;letter-spacing:0.06em;color:#fff;margin:0;font-size:1.1rem;">Karkhana</h2>'
-            + '<button id="k-docs-close" style="background:none;border:none;color:#666;font-size:1.3rem;cursor:pointer;">\u00D7</button>';
+            + '<button id="k-docs-close" style="background:none;border:none;color:var(--kk-ink-mute);font-size:1.3rem;cursor:pointer;">\u00D7</button>';
         modal.appendChild(header);
 
         /* Tabs */
         var tabRow = document.createElement('div');
-        tabRow.style.cssText = 'display:flex;gap:0;padding:12px 20px 0;border-bottom:1px solid #1a1a24;';
+        tabRow.style.cssText = 'display:flex;gap:0;padding:12px 20px 0;border-bottom:1px solid var(--kk-line);';
         tabs.forEach(function(t) {
             var btn = document.createElement('button');
             btn.textContent = t.label;
             btn.dataset.tab = t.id;
             btn.className = 'help-tab';
-            btn.style.cssText = 'background:none;border:none;border-bottom:2px solid transparent;padding:6px 14px;color:#888;font-size:0.78rem;cursor:pointer;transition:all 0.15s;font-family:inherit;';
+            btn.style.cssText = 'background:none;border:none;border-bottom:2px solid transparent;padding:6px 14px;color:var(--kk-ink-soft);font-size:0.78rem;cursor:pointer;transition:all 0.15s;font-family:inherit;';
             tabRow.appendChild(btn);
         });
         modal.appendChild(tabRow);
 
         /* Content */
         var content = document.createElement('div');
-        content.style.cssText = 'flex:1;overflow-y:auto;padding:20px;color:#ccc;font-size:0.82rem;line-height:1.7;';
+        content.style.cssText = 'flex:1;overflow-y:auto;padding:20px;color:var(--kk-ink-mid);font-size:0.82rem;line-height:1.7;';
         content.innerHTML = '<style>'
-            + '#k-docs h3{color:#ff6b35;font-size:0.85rem;font-weight:500;margin:20px 0 8px;}'
+            + '#k-docs h3{color:var(--kk-brand);font-size:0.85rem;font-weight:500;margin:20px 0 8px;}'
             + '#k-docs h3:first-child{margin-top:0;}'
             + '#k-docs p{color:#999;margin:6px 0;}'
             + '#k-docs ul,#k-docs ol{color:#999;padding-left:20px;}'
             + '#k-docs li{margin:4px 0;}'
-            + '#k-docs code{color:#ccc;background:#1a1a28;padding:1px 5px;border-radius:2px;font-size:0.8em;}'
-            + '#k-docs pre{font-size:0.7rem;color:#888;background:#0a0a12;padding:14px;border-radius:4px;overflow-x:auto;border:1px solid #1a1a24;line-height:1.5;margin:8px 0;}'
+            + '#k-docs code{color:var(--kk-ink-mid);background:var(--kk-row);padding:1px 5px;border-radius:2px;font-size:0.8em;}'
+            + '#k-docs pre{font-size:0.7rem;color:var(--kk-ink-soft);background:#0a0a12;padding:14px;border-radius:4px;overflow-x:auto;border:1px solid var(--kk-line);line-height:1.5;margin:8px 0;}'
             + '#k-docs table{width:100%;border-collapse:collapse;margin:8px 0;}'
-            + '#k-docs td{padding:6px 0;color:#999;font-size:0.8rem;border-bottom:1px solid #1a1a24;}'
-            + '#k-docs td.sc-key{color:#ff6b35;font-family:monospace;font-size:0.78rem;width:120px;}'
+            + '#k-docs td{padding:6px 0;color:#999;font-size:0.8rem;border-bottom:1px solid var(--kk-line);}'
+            + '#k-docs td.sc-key{color:var(--kk-brand);font-family:monospace;font-size:0.78rem;width:120px;}'
             + '</style>';
         modal.appendChild(content);
 
@@ -2494,8 +2509,8 @@
         function activateTab(id) {
             tabRow.querySelectorAll('.help-tab').forEach(function(b) {
                 var active = b.dataset.tab === id;
-                b.style.borderBottomColor = active ? '#ff6b35' : 'transparent';
-                b.style.color = active ? '#fff' : '#888';
+                b.style.borderBottomColor = active ? 'var(--kk-brand)' : 'transparent';
+                b.style.color = active ? '#fff' : 'var(--kk-ink-soft)';
             });
             content.innerHTML = content.querySelector('style').outerHTML + (panes[id] || '');
         }

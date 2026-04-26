@@ -115,6 +115,12 @@ Karkhana/
     buildroot-bzimage68.bin  # Buildroot Linux 6.8 (10 MB)
 ```
 
+## Palette
+
+Coloured with **`westafrica-10 · ÒRUN`** — the Yoruba night sky, kente-gold ink, electric-indigo directories. The "most vivid dark" in the Rangrez library, fitting for a hacker workshop where every directory is a constellation.
+
+Palette pulled from [**Rangrez**](https://github.com/NakliTechie/rangrez), the global colour-palette library that backs all NakliTechie projects.
+
 ## Part of a series
 
 Karkhana is part of the [NakliTechie](https://naklitechie.github.io/) collection of browser-native tools. No server, no API keys, no data leaving your device.
