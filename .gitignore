@@ -31,3 +31,9 @@ images/alpine-rootfs-flat/*
 alpine-build/*
 !alpine-build/Dockerfile
 !alpine-build/build.sh
+
+# qemu-wasm build (recipe tracked; 494MB+ output bundles rebuilt via qemu-build/build.sh)
+!qemu-build/
+qemu-build/*
+!qemu-build/Dockerfile.guest
+!qemu-build/build.sh

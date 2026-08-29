@@ -1,0 +1,22 @@
+# Karkhana guest userland — modern 64-bit glibc Debian for qemu-wasm.
+# Replaces the v86 32-bit musl Alpine. This image is the container workload
+# c2w runs inside the qemu-wasm micro-VM; its rootfs becomes the browser guest.
+FROM debian:12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Non-anemic userland: real glibc, Python 3.11 with working native pip wheels,
+# Node.js for TUIs, plus the tools a coding agent expects.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash coreutils ca-certificates \
+      python3 python3-pip python3-venv \
+      nodejs npm \
+      sqlite3 curl git less nano procps iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN printf '\nKarkhana / \340\244\225\340\244\276\340\244\260\340\244\226\340\274\200\340\244\250\340\244\276 \342\200\224 Debian 12 (glibc) on qemu-wasm\nType "agent" (python) or run a node TUI.\n' > /etc/motd \
+    && echo 'root:x:0:0:root:/root:/bin/bash' > /etc/passwd \
+    && echo 'PS1="karkhana:\w\$ "' >> /root/.bashrc
+
+WORKDIR /root
+CMD ["/bin/bash"]
