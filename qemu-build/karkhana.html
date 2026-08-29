@@ -1,0 +1,142 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Karkhana — Debian 12 on qemu-wasm</title>
+    <link rel="stylesheet" href="vendor/xterm.css" />
+    <style>
+      :root {
+        --kk-body:#08081a; --kk-panel:#14142a; --kk-row:#1a1428; --kk-line:#2a2040;
+        --kk-ink:#f0d2a0; --kk-ink-soft:#a89868; --kk-ink-mid:#c8a868; --kk-ink-mute:#7a684c;
+        --kk-brand:#d83858; --kk-act:#4a6ad8; --kk-ok:#5aaa3a; --kk-warn:#d8a868;
+      }
+      * { box-sizing:border-box; }
+      body { background:var(--kk-body); color:var(--kk-ink); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; margin:0; height:100vh; display:flex; flex-direction:column; }
+      header { display:flex; align-items:center; gap:12px; padding:8px 14px; background:var(--kk-panel); border-bottom:1px solid var(--kk-line); font-size:13px; }
+      header .brand { color:var(--kk-brand); font-weight:700; letter-spacing:.04em; }
+      header .devanagari { color:var(--kk-ink-soft); }
+      #vmstate { margin-left:auto; padding:2px 10px; border:1px solid var(--kk-line); border-radius:3px; font-size:12px; color:var(--kk-ink-mute); }
+      #vmstate.booting { color:var(--kk-warn); border-color:var(--kk-warn); }
+      #vmstate.shell   { color:var(--kk-ok);   border-color:var(--kk-ok); }
+      #vmstate.panicked{ color:var(--kk-brand);border-color:var(--kk-brand); }
+      #terminal { flex:1; padding:6px 10px; min-height:0; }
+      .xterm .xterm-viewport { background:var(--kk-body) !important; }
+      #overlay { position:fixed; inset:0; background:var(--kk-body); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; transition:opacity .6s; z-index:10; }
+      #overlay.gone { opacity:0; pointer-events:none; }
+      #overlay .big { font-size:26px; color:var(--kk-brand); font-weight:700; }
+      #overlay .sub { color:var(--kk-ink-soft); font-size:13px; }
+      #overlay .stage { color:var(--kk-ink-mid); font-size:13px; min-height:18px; }
+      #bar { width:280px; height:4px; background:var(--kk-row); border:1px solid var(--kk-line); }
+      #bar > div { height:100%; width:0%; background:var(--kk-act); transition:width .4s; }
+      footer { padding:4px 14px; font-size:11px; color:var(--kk-ink-mute); border-top:1px solid var(--kk-line); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="brand">KARKHANA</span><span class="devanagari">कारख़ाना</span>
+      <span style="color:var(--kk-ink-mute)">Debian 12 · glibc · python3 · node — qemu-wasm engine</span>
+      <span id="vmstate">stopped</span>
+    </header>
+    <div id="terminal"></div>
+    <footer>engine: qemu-wasm (x86_64, TCG) · guest: Debian 12 bookworm · first boot takes minutes, the page is not stuck</footer>
+    <div id="overlay">
+      <div class="big">कारख़ाना</div>
+      <div class="sub">booting Debian 12 in your browser — nothing leaves this tab</div>
+      <div id="bar"><div></div></div>
+      <div class="stage" id="stage">loading emulator…</div>
+    </div>
+
+    <script src="vendor/xterm.js"></script>
+    <script src="vendor/xterm-pty.js"></script>
+    <script src="./load.js"></script>
+    <script type="module">
+      import './arg-module.js';
+      import initEmscriptenModule from './out.js';
+
+      const stateEl = document.getElementById('vmstate');
+      const overlay = document.getElementById('overlay');
+      const stageEl = document.getElementById('stage');
+      const barEl   = document.querySelector('#bar > div');
+      const setState = (s) => { stateEl.textContent = s; stateEl.className = s; };
+      const setStage = (t, pct) => { stageEl.textContent = t; if (pct != null) barEl.style.width = pct + '%'; };
+
+      const xterm = new Terminal({
+        convertEol: true, fontSize: 13, cursorBlink: true,
+        theme: { background:'#08081a', foreground:'#f0d2a0', cursor:'#d83858',
+                 selectionBackground:'#2a2040', black:'#14142a', red:'#d83858',
+                 green:'#5aaa3a', yellow:'#d8a868', blue:'#4a6ad8', magenta:'#c8a868',
+                 cyan:'#a89868', white:'#f0d2a0' }
+      });
+      xterm.open(document.getElementById('terminal'));
+
+      const { master, slave } = openpty();
+      xterm.loadAddon(master);
+      Module.pty = slave;
+      Module['mainScriptUrlOrBlob'] = location.origin + location.pathname.replace(/[^/]*$/, '') + 'out.js';
+      Module['preRun'] ??= [];
+
+      // ---- boot progress: watch guest output for stage markers ----
+      let booted = false, tail = '';
+      const dataListeners = [];
+      master.onWrite(([bytes]) => {
+        const text = new TextDecoder().decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+        dataListeners.forEach(cb => { try { cb(text); } catch (e) {} });
+        if (booted) return;
+        tail = (tail + text).slice(-2000);
+        if (/Linux version/.test(tail))            setStage('kernel up…', 35);
+        if (/mounting .*overlay/.test(tail))       setStage('mounting rootfs…', 60);
+        if (/executing\(pre-run\)/.test(tail))     setStage('starting Debian container…', 80);
+        if (/karkhana:|\$ $|# $/.test(tail)) {
+          booted = true; setState('shell'); setStage('ready', 100);
+          setTimeout(() => overlay.classList.add('gone'), 400);
+        }
+      });
+
+      // /pack/info drives container init (see c2w cmd/init)
+      const info = 't:' + Math.round(Date.now() / 1000) + '\n';
+      Module['preRun'].push((mod) => {
+        try { mod.FS.mkdir('/pack'); } catch (e) {}
+        mod.FS.writeFile('/pack/info', info);
+      });
+
+      let readableCallbacks = [];
+      Module.pty.onReadable(() => { readableCallbacks.forEach(cb => cb()); readableCallbacks = []; });
+      Module['preRun'].push((mod) => {
+        mod['TTY'].stream_ops.poll = (stream, timeout, notifyCallback) => {
+          if (mod.pty.readable) return 1;
+          if (notifyCallback != null) {
+            notifyCallback.registerCleanupFunc(() => {
+              const i = readableCallbacks.indexOf(notifyCallback);
+              if (i != -1) readableCallbacks.splice(i, 1);
+            });
+            readableCallbacks.push(notifyCallback);
+          }
+          return 0;
+        };
+      });
+
+      // ---- agent face: window.karkhana (same seam the v86 build exposed) ----
+      window.karkhana = {
+        engine: 'qemu-wasm',
+        shell: {
+          send: (text) => slave.ldisc.writeFromLower(text),
+          exec: (cmd)  => slave.ldisc.writeFromLower(cmd + '\r'),
+          onData: (cb) => { dataListeners.push(cb); return () => { const i = dataListeners.indexOf(cb); if (i !== -1) dataListeners.splice(i, 1); }; },
+        },
+        vm: { get state() { return stateEl.textContent; } },
+        pty: slave,
+      };
+
+      setState('booting'); setStage('starting emulator…', 10);
+      (async () => {
+        try {
+          await initEmscriptenModule(Module);
+        } catch (e) {
+          setState('panicked'); setStage('panicked — ' + e, 100);
+          overlay.classList.remove('gone');
+          console.error(e);
+        }
+      })();
+    </script>
+  </body>
+</html>

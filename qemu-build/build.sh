@@ -24,8 +24,13 @@ mkdir -p "$OUT"
   --build-arg SOURCE_REPO_VERSION=main \
   --build-arg VM_MEMORY_SIZE_MB=1024 \
   --build-arg LINUX_LOGLEVEL=7 \
-  --build-arg QEMU_MIGRATION=false \
+  --build-arg QEMU_MIGRATION=true \
   "$IMG" "$OUT"
 
 echo "==> Done. Artifacts in $OUT :"
 ls -la "$OUT"
+
+echo "==> Installing Karkhana console page + vendored terminal assets…"
+cp "$(pwd)/karkhana.html" "$OUT/karkhana.html"
+cp -R "$(pwd)/vendor" "$OUT/vendor"
+echo "==> Serve: python3 serve.py 8793 (from qemu-build/) then open http://127.0.0.1:8793/karkhana.html"

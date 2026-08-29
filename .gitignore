@@ -37,3 +37,10 @@ alpine-build/*
 qemu-build/*
 !qemu-build/Dockerfile.guest
 !qemu-build/build.sh
+!qemu-build/karkhana.html
+!qemu-build/serve.py
+!qemu-build/vendor/
+qemu-build/vendor/*
+!qemu-build/vendor/xterm.js
+!qemu-build/vendor/xterm.css
+!qemu-build/vendor/xterm-pty.js
