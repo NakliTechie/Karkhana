@@ -7,6 +7,72 @@
 const CACHE = 'karkhana-engine-v1';
 const BIG = /\.(wasm|data|gzip)$/;
 
+// 3) BYOK agent bridge: the guest's agent talks to http(s)://api.karkhana.internal;
+//    the network proxy's outbound fetch lands here, and we rewrite it to the
+//    user's configured endpoint + inject the Authorization header. The key lives
+//    in browser-side IndexedDB and never enters the VM.
+const AI_HOST = 'api.karkhana.internal';
+
+const idbGet = (key) => new Promise((resolve) => {
+  const open = indexedDB.open('karkhana', 1);
+  open.onupgradeneeded = () => open.result.createObjectStore('kv');
+  open.onerror = () => resolve(null);
+  open.onsuccess = () => {
+    const tx = open.result.transaction('kv', 'readonly');
+    const req = tx.objectStore('kv').get(key);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => resolve(null);
+  };
+});
+
+// GP tier from inside the guest: endpoint 'builtin:nano' relays the prompt to a
+// window client, which asks on-device Gemini Nano and replies over a MessageChannel.
+const nanoViaClient = async (request) => {
+  let prompt = '';
+  try {
+    const body = await request.json();
+    prompt = (body.messages || []).map((m) => (m.role === 'system' ? '[instructions] ' : '') + m.content).join('\n');
+  } catch (e) { prompt = 'Say: send JSON {messages:[...]} to this endpoint.'; }
+  const clientsList = await self.clients.matchAll({ type: 'window' });
+  if (!clientsList.length) return new Response(JSON.stringify({ error: 'karkhana: no page open for nano' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+  const ch = new MessageChannel();
+  const reply = new Promise((resolve) => {
+    ch.port1.onmessage = (e) => resolve(e.data);
+    setTimeout(() => resolve({ ok: false, error: 'nano timeout (120s)' }), 120000);
+  });
+  clientsList[0].postMessage({ type: 'karkhana-nano', prompt }, [ch.port2]);
+  const res = await reply;
+  if (!res.ok) return new Response(JSON.stringify({ error: res.error }), { status: 502, headers: { 'Content-Type': 'application/json' } });
+  return new Response(JSON.stringify({
+    id: 'karkhana-nano', object: 'chat.completion', model: 'gemini-nano-on-device',
+    choices: [{ index: 0, message: { role: 'assistant', content: res.answer }, finish_reason: 'stop' }],
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+
+const bridgeAi = async (request) => {
+  const cfg = await idbGet('ai-agent');
+  if (!cfg || !cfg.endpoint) {
+    return new Response(JSON.stringify({ error: 'karkhana: no agent endpoint configured (Settings -> Agent AI)' }),
+                        { status: 503, headers: { 'Content-Type': 'application/json' } });
+  }
+  if (cfg.endpoint === 'builtin:nano') return nanoViaClient(request);
+  const url = new URL(request.url);
+  const target = cfg.endpoint.replace(/\/$/, '') + url.pathname + url.search;
+  const headers = new Headers(request.headers);
+  headers.delete('host');
+  if (cfg.key) headers.set('Authorization', 'Bearer ' + cfg.key);
+  try {
+    return await fetch(target, {
+      method: request.method,
+      headers,
+      body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : await request.arrayBuffer(),
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: 'karkhana bridge fetch failed: ' + err.message }),
+                        { status: 502, headers: { 'Content-Type': 'application/json' } });
+  }
+};
+
 self.addEventListener('install', (e) => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
@@ -25,6 +91,7 @@ const withCoi = (resp) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
+  if (url.hostname === AI_HOST) { e.respondWith(bridgeAi(e.request)); return; }
   if (url.origin !== location.origin || e.request.method !== 'GET') return;
   if (BIG.test(url.pathname)) {
     e.respondWith((async () => {

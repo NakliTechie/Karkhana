@@ -18,5 +18,9 @@ RUN printf '\nKarkhana / \340\244\225\340\244\276\340\244\260\340\244\226\340\27
     && echo 'root:x:0:0:root:/root:/bin/bash' > /etc/passwd \
     && echo 'PS1="karkhana:\w\$ "' >> /root/.bashrc
 
+# The coding agent: OpenAI protocol to the browser-side bridge; keys stay outside the VM.
+COPY guest/agent.py /usr/bin/agent
+RUN chmod +x /usr/bin/agent
+
 WORKDIR /root
 CMD ["/bin/bash"]

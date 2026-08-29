@@ -185,7 +185,14 @@
           },
           agent: {
             get config() { try { return JSON.parse(localStorage.getItem('karkhana-ai-agent')) || null; } catch (e) { return null; } },
-            set config(c) { localStorage.setItem('karkhana-ai-agent', JSON.stringify(c)); }, // {endpoint, model, key} — key stays browser-side
+            // {endpoint, model, key} — key stays browser-side; mirrored to IDB so the
+            // SW bridge (api.karkhana.internal) can inject Authorization for the guest.
+            set config(c) {
+              localStorage.setItem('karkhana-ai-agent', JSON.stringify(c));
+              const open = indexedDB.open('karkhana', 1);
+              open.onupgradeneeded = () => open.result.createObjectStore('kv');
+              open.onsuccess = () => open.result.transaction('kv', 'readwrite').objectStore('kv').put(c, 'ai-agent');
+            },
           },
           // naklios rule: wantsAgent -> endpoint or nothing; GP -> Nano first.
           resolve: async (wantsAgent) => {
@@ -197,6 +204,17 @@
           },
         },
       };
+
+      // SW relay: guest -> bridge -> here -> on-device Nano -> back to guest.
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', (e) => {
+          if (e.data && e.data.type === 'karkhana-nano' && e.ports[0]) {
+            window.karkhana.ai.gp.ask(e.data.prompt)
+              .then((answer) => e.ports[0].postMessage({ ok: true, answer }))
+              .catch((err) => e.ports[0].postMessage({ ok: false, error: err.message }));
+          }
+        });
+      }
 
       setState('booting'); setStage('starting network stack…', 5);
       (async () => {
