@@ -39,6 +39,7 @@ qemu-build/*
 !qemu-build/build.sh
 !qemu-build/karkhana.html
 !qemu-build/serve.py
+!qemu-build/karkhana-sw.js
 !qemu-build/vendor/
 qemu-build/vendor/*
 !qemu-build/vendor/xterm.js

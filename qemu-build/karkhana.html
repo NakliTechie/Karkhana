@@ -46,6 +46,21 @@
       <div class="stage" id="stage">loading emulator…</div>
     </div>
 
+    <script>
+      // Storage ladder + host independence: SW caches the 550MB+ engine artifacts
+      // (download once) and supplies COOP/COEP on hosts that can't set headers.
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./karkhana-sw.js').then(async (reg) => {
+          await navigator.serviceWorker.ready;
+          // coi-serviceworker pattern: if isolation is missing and the SW isn't
+          // controlling this load yet, reload once so headers apply.
+          if (!window.crossOriginIsolated && !navigator.serviceWorker.controller && !sessionStorage.getItem('kk-coi-reload')) {
+            sessionStorage.setItem('kk-coi-reload', '1');
+            location.reload();
+          }
+        }).catch((e) => console.warn('sw registration failed', e));
+      }
+    </script>
     <script src="vendor/xterm.js"></script>
     <script src="vendor/xterm-pty.js"></script>
     <script src="./load.js"></script>
@@ -60,6 +75,12 @@
       const barEl   = document.querySelector('#bar > div');
       const setState = (s) => { stateEl.textContent = s; stateEl.className = s; };
       const setStage = (t, pct) => { stageEl.textContent = t; if (pct != null) barEl.style.width = pct + '%'; };
+
+      // Surface the engine download (dominates first load; instant once SW-cached).
+      Module['setStatus'] = (s) => {
+        const m = /\((\d+)\/(\d+)\)/.exec(s || '');
+        if (m) setStage('downloading engine — ' + (+m[1] / 1048576 | 0) + ' / ' + (+m[2] / 1048576 | 0) + ' MB (cached after first load)', Math.min(30, Math.round((+m[1] / +m[2]) * 30)));
+      };
 
       const xterm = new Terminal({
         convertEol: true, fontSize: 13, cursorBlink: true,

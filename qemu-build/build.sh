@@ -41,3 +41,4 @@ gzip -kf "$OUT/c2w-net-proxy.wasm" && mv "$OUT/c2w-net-proxy.wasm.gz" "$OUT/c2w-
 ( cd "$(dirname "$0")/net/stack" && npm install --no-audit --no-fund && npx webpack )
 mkdir -p "$OUT/dist"
 cp "$(dirname "$0")/net/stack/dist/stack.js" "$(dirname "$0")/net/stack/dist/stack-worker.js" "$OUT/dist/"
+cp "$(dirname "$0")/karkhana-sw.js" "$OUT/karkhana-sw.js"
