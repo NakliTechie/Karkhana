@@ -163,6 +163,39 @@
         },
         vm: { get state() { return stateEl.textContent; } },
         pty: slave,
+        // ---- AI ladder (naklios two-tier bifurcation) ----
+        // GP tier: Chrome built-in Gemini Nano — on-device, free, private. Fine for
+        // general queries, useless for coding (by design, never offered to the agent).
+        // Agent tier: the user's configured endpoint (BYOK) — never Nano.
+        ai: {
+          gp: {
+            probe: async () => {
+              try {
+                const LM = window.LanguageModel || (window.ai && window.ai.languageModel);
+                if (!LM) return 'unsupported';
+                return await (LM.availability ? LM.availability() : LM.capabilities().then(c => c.available));
+              } catch (e) { return 'error:' + e.message; }
+            },
+            ask: async (prompt, opts = {}) => {
+              const LM = window.LanguageModel || (window.ai && window.ai.languageModel);
+              if (!LM) throw new Error('Nano unavailable: no LanguageModel API');
+              const session = await LM.create(opts.createOptions || {});
+              try { return await session.prompt(prompt); } finally { session.destroy && session.destroy(); }
+            },
+          },
+          agent: {
+            get config() { try { return JSON.parse(localStorage.getItem('karkhana-ai-agent')) || null; } catch (e) { return null; } },
+            set config(c) { localStorage.setItem('karkhana-ai-agent', JSON.stringify(c)); }, // {endpoint, model, key} — key stays browser-side
+          },
+          // naklios rule: wantsAgent -> endpoint or nothing; GP -> Nano first.
+          resolve: async (wantsAgent) => {
+            const agentCfg = window.karkhana.ai.agent.config;
+            if (wantsAgent) return agentCfg ? { tier: 'agent', ...agentCfg } : null;
+            const avail = await window.karkhana.ai.gp.probe();
+            if (avail === 'available' || avail === 'readily') return { tier: 'gp', model: 'Gemini Nano (on-device)' };
+            return agentCfg ? { tier: 'agent', ...agentCfg } : null;
+          },
+        },
       };
 
       setState('booting'); setStage('starting network stack…', 5);
