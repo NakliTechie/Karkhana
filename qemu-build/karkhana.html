@@ -49,6 +49,7 @@
     <script src="vendor/xterm.js"></script>
     <script src="vendor/xterm-pty.js"></script>
     <script src="./load.js"></script>
+    <script src="./dist/stack.js"></script>
     <script type="module">
       import './arg-module.js';
       import initEmscriptenModule from './out.js';
@@ -92,11 +93,27 @@
         }
       });
 
+      // ---- networking: in-page gvisor stack (c2w-net-proxy) bridged to fetch() ----
+      // Guest gets a virtio NIC; every TCP connect lands on the mock WebSocket at
+      // stackAddress, served by the wasm network stack in a worker. HTTP(S) egress
+      // rides browser fetch() — CORS rules apply, nothing else leaves the tab.
+      const genmac = () => '02:XX:XX:XX:XX:XX'.replace(/X/g, () => '0123456789ABCDEF'[Math.floor(Math.random() * 16)]);
+      const netReady = new Promise((resolve) => {
+        try {
+          const stackAddress = 'http://localhost:9999/';
+          Module['websocket'] = { url: stackAddress };
+          Stack.Start(stackAddress,
+                      location.origin + location.pathname.replace(/[^/]*$/, '') + 'dist/stack-worker.js',
+                      location.origin + location.pathname.replace(/[^/]*$/, '') + 'c2w-net-proxy.wasm.gzip',
+                      (cert) => resolve(cert));
+          setTimeout(() => resolve(null), 20000); // don't hold boot hostage if the stack stalls
+        } catch (e) { console.error('net stack failed to start', e); resolve(null); }
+      });
+
       // /pack/info drives container init (see c2w cmd/init)
-      const info = 't:' + Math.round(Date.now() / 1000) + '\n';
       Module['preRun'].push((mod) => {
         try { mod.FS.mkdir('/pack'); } catch (e) {}
-        mod.FS.writeFile('/pack/info', info);
+        // placeholder; real content written in run() below before the VM starts
       });
 
       let readableCallbacks = [];
@@ -127,9 +144,27 @@
         pty: slave,
       };
 
-      setState('booting'); setStage('starting emulator…', 10);
+      setState('booting'); setStage('starting network stack…', 5);
       (async () => {
         try {
+          const cert = await netReady;
+          let info = 't:' + Math.round(Date.now() / 1000) + '\n';
+          if (cert) {
+            window.karkhana.net = { mode: 'browser-fetch', cert: true };
+            Module['preRun'].push((mod) => {
+              try { mod.FS.mkdir('/.wasmenv'); } catch (e) {}
+              mod.FS.writeFile('/.wasmenv/proxy.crt', cert);
+            });
+            info += 'n:' + genmac() + '\n';
+            info += 'm: .wasmenv\nenv: SSL_CERT_FILE=/.wasmenv/proxy.crt\nenv: https_proxy=http://192.168.127.253:80\nenv: http_proxy=http://192.168.127.253:80\nenv: HTTPS_PROXY=http://192.168.127.253:80\nenv: HTTP_PROXY=http://192.168.127.253:80';
+          } else {
+            window.karkhana.net = { mode: 'offline', cert: false };
+          }
+          Module['preRun'].push((mod) => {
+            try { mod.FS.mkdir('/pack'); } catch (e) {}
+            mod.FS.writeFile('/pack/info', info);
+          });
+          setStage('starting emulator…', 10);
           await initEmscriptenModule(Module);
         } catch (e) {
           setState('panicked'); setStage('panicked — ' + e, 100);

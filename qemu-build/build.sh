@@ -34,3 +34,10 @@ echo "==> Installing Karkhana console page + vendored terminal assets…"
 cp "$(pwd)/karkhana.html" "$OUT/karkhana.html"
 cp -R "$(pwd)/vendor" "$OUT/vendor"
 echo "==> Serve: python3 serve.py 8793 (from qemu-build/) then open http://127.0.0.1:8793/karkhana.html"
+
+echo "==> Building network stack (c2w-net-proxy + in-page gvisor stack)…"
+( cd "$(dirname "$0")/net/c2w-net-proxy" && GOOS=wasip1 GOARCH=wasm go build -o "$OUT/c2w-net-proxy.wasm" . )
+gzip -kf "$OUT/c2w-net-proxy.wasm" && mv "$OUT/c2w-net-proxy.wasm.gz" "$OUT/c2w-net-proxy.wasm.gzip"
+( cd "$(dirname "$0")/net/stack" && npm install --no-audit --no-fund && npx webpack )
+mkdir -p "$OUT/dist"
+cp "$(dirname "$0")/net/stack/dist/stack.js" "$(dirname "$0")/net/stack/dist/stack-worker.js" "$OUT/dist/"
