@@ -155,17 +155,32 @@
       // stackAddress, served by the wasm network stack in a worker. HTTP(S) egress
       // rides browser fetch() — CORS rules apply, nothing else leaves the tab.
       const genmac = () => '02:XX:XX:XX:XX:XX'.replace(/X/g, () => '0123456789ABCDEF'[Math.floor(Math.random() * 16)]);
-      const netReady = new Promise((resolve) => {
+      // Dev-mode relay: if a local c2w-net relay is listening (net/c2w-net -listen-ws
+      // localhost:8888), the guest gets REAL TCP/IP — no CORS limits, no MITM cert,
+      // full speed (pip/apt/git work unmodified). Absent relay -> in-page fetch stack.
+      const RELAY = 'ws://127.0.0.1:8888/';
+      const probeRelay = () => new Promise((resolve) => {
         try {
-          const stackAddress = 'http://localhost:9999/';
-          Module['websocket'] = { url: stackAddress };
-          Stack.Start(stackAddress,
-                      location.origin + location.pathname.replace(/[^/]*$/, '') + 'dist/stack-worker.js',
-                      location.origin + location.pathname.replace(/[^/]*$/, '') + 'c2w-net-proxy.wasm.gzip',
-                      (cert) => resolve(cert));
-          setTimeout(() => resolve(null), 20000); // don't hold boot hostage if the stack stalls
-        } catch (e) { console.error('net stack failed to start', e); resolve(null); }
+          const ws = new WebSocket(RELAY);
+          const t = setTimeout(() => { try { ws.close(); } catch (e) {} resolve(false); }, 1500);
+          ws.onopen = () => { clearTimeout(t); ws.close(); resolve(true); };
+          ws.onerror = () => { clearTimeout(t); resolve(false); };
+        } catch (e) { resolve(false); }
       });
+      const netReady = (async () => {
+        if (await probeRelay()) return { mode: 'relay' };
+        return new Promise((resolve) => {
+          try {
+            const stackAddress = 'http://localhost:9999/';
+            Module['websocket'] = { url: stackAddress };
+            Stack.Start(stackAddress,
+                        location.origin + location.pathname.replace(/[^/]*$/, '') + 'dist/stack-worker.js',
+                        location.origin + location.pathname.replace(/[^/]*$/, '') + 'c2w-net-proxy.wasm.gzip',
+                        (cert) => resolve({ mode: 'browser-fetch', cert }));
+            setTimeout(() => resolve(null), 20000); // don't hold boot hostage if the stack stalls
+          } catch (e) { console.error('net stack failed to start', e); resolve(null); }
+        });
+      })();
 
       // /pack/info drives container init (see c2w cmd/init)
       Module['preRun'].push((mod) => {
@@ -271,10 +286,16 @@
       setState('booting'); setStage('starting network stack…', 5);
       (async () => {
         try {
-          const cert = await netReady;
+          const net = await netReady;
           let info = 't:' + Math.round(Date.now() / 1000) + '\n';
-          if (cert) {
+          if (net && net.mode === 'relay') {
+            // real TCP via local relay — no proxy env, no cert; DHCP against the relay's stack
+            window.karkhana.net = { mode: 'relay', cert: false };
+            Module['websocket'] = { url: RELAY };
+            info += 'n:' + genmac() + '\n';
+          } else if (net && net.cert) {
             window.karkhana.net = { mode: 'browser-fetch', cert: true };
+            const cert = net.cert;
             Module['preRun'].push((mod) => {
               try { mod.FS.mkdir('/.wasmenv'); } catch (e) {}
               mod.FS.writeFile('/.wasmenv/proxy.crt', cert);

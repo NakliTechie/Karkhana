@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 BEAGLE="/Users/chiragpatnaik/Code/beagle"
 C2W="$BEAGLE/vendor/container2wasm/out/c2w"
-DOCKERFILE="$BEAGLE/patches/Dockerfile.beagle"
+DOCKERFILE="$(pwd)/Dockerfile.builder"
 IMG="karkhana-debian:amd64"
 OUT="$(pwd)/out/htdocs/"
 

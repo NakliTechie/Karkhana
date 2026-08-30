@@ -64,3 +64,4 @@ qemu-build/net/stack/*
 !qemu-build/net/stack/package.json
 !qemu-build/net/stack/webpack.config.js
 !qemu-build/net/stack/tsconfig.json
+!qemu-build/Dockerfile.builder
