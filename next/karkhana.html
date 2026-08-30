@@ -1,0 +1,415 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Karkhana — Debian 12 on qemu-wasm</title>
+    <link rel="stylesheet" href="vendor/xterm.css" />
+    <style>
+      :root {
+        --kk-body:#08081a; --kk-panel:#14142a; --kk-row:#1a1428; --kk-line:#2a2040;
+        --kk-ink:#f0d2a0; --kk-ink-soft:#a89868; --kk-ink-mid:#c8a868; --kk-ink-mute:#7a684c;
+        --kk-brand:#d83858; --kk-act:#4a6ad8; --kk-ok:#5aaa3a; --kk-warn:#d8a868;
+      }
+      * { box-sizing:border-box; }
+      body { background:var(--kk-body); color:var(--kk-ink); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; margin:0; height:100vh; display:flex; flex-direction:column; }
+      header { display:flex; align-items:center; gap:12px; padding:8px 14px; background:var(--kk-panel); border-bottom:1px solid var(--kk-line); font-size:13px; }
+      header .brand { color:var(--kk-brand); font-weight:700; letter-spacing:.04em; }
+      header .devanagari { color:var(--kk-ink-soft); }
+      #vmstate { margin-left:auto; padding:2px 10px; border:1px solid var(--kk-line); border-radius:3px; font-size:12px; color:var(--kk-ink-mute); }
+      #vmstate.booting { color:var(--kk-warn); border-color:var(--kk-warn); }
+      #vmstate.shell   { color:var(--kk-ok);   border-color:var(--kk-ok); }
+      #vmstate.panicked{ color:var(--kk-brand);border-color:var(--kk-brand); }
+      #terminal { flex:1; padding:6px 10px; min-height:0; }
+      .xterm .xterm-viewport { background:var(--kk-body) !important; }
+      #overlay { position:fixed; inset:0; background:var(--kk-body); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; transition:opacity .6s; z-index:10; }
+      #overlay.gone { opacity:0; pointer-events:none; }
+      #overlay .big { font-size:26px; color:var(--kk-brand); font-weight:700; }
+      #overlay .sub { color:var(--kk-ink-soft); font-size:13px; }
+      #overlay .stage { color:var(--kk-ink-mid); font-size:13px; min-height:18px; }
+      #bar { width:280px; height:4px; background:var(--kk-row); border:1px solid var(--kk-line); }
+      #bar > div { height:100%; width:0%; background:var(--kk-act); transition:width .4s; }
+      footer { padding:4px 14px; font-size:11px; color:var(--kk-ink-mute); border-top:1px solid var(--kk-line); }
+      #cfgbtn { margin-left:auto; background:none; border:1px solid var(--kk-line); color:var(--kk-ink-soft); border-radius:3px; cursor:pointer; padding:1px 8px; font-size:13px; }
+      #cfgbtn:hover { color:var(--kk-ink); border-color:var(--kk-ink-mute); }
+      #vmstate { margin-left:0; }
+      #cfgpanel { background:var(--kk-panel); border-bottom:1px solid var(--kk-line); padding:10px 14px; display:flex; flex-direction:column; gap:8px; font-size:12px; }
+      #cfgpanel .row { display:flex; align-items:center; gap:10px; }
+      #cfgpanel label { width:64px; color:var(--kk-ink-soft); }
+      #cfgpanel input { flex:1; max-width:480px; background:var(--kk-row); border:1px solid var(--kk-line); color:var(--kk-ink); padding:4px 8px; border-radius:3px; font:inherit; }
+      #cfgpanel input:focus { outline:none; border-color:var(--kk-act); }
+      #cfgpanel .actions button { background:var(--kk-row); border:1px solid var(--kk-line); color:var(--kk-ink-mid); padding:3px 10px; border-radius:3px; cursor:pointer; font:inherit; }
+      #cfgpanel .actions button:hover { border-color:var(--kk-act); color:var(--kk-ink); }
+      #cfg-note { color:var(--kk-ok); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="brand">KARKHANA</span><span class="devanagari">कारख़ाना</span>
+      <span style="color:var(--kk-ink-mute)">Debian 12 · glibc · python3 · node — qemu-wasm engine</span>
+      <button id="cfgbtn" title="Agent AI settings">⚙</button>
+      <span id="vmstate">stopped</span>
+    </header>
+    <div id="cfgpanel" hidden>
+      <div class="row"><label>Endpoint</label><input id="cfg-endpoint" placeholder="https://openrouter.ai/api  ·  or builtin:nano" /></div>
+      <div class="row"><label>Model</label><input id="cfg-model" placeholder="e.g. deepseek/deepseek-chat" /></div>
+      <div class="row"><label>API key</label><input id="cfg-key" type="password" placeholder="stays in this browser — never enters the VM" /></div>
+      <div class="row actions">
+        <button id="cfg-nano">use on-device Nano (GP only)</button>
+        <button id="cfg-save">save</button>
+        <span id="cfg-note"></span>
+      </div>
+    </div>
+    <div id="terminal"></div>
+    <footer>engine: qemu-wasm (x86_64, TCG) · guest: Debian 12 bookworm · first boot takes minutes, the page is not stuck</footer>
+    <div id="overlay">
+      <div class="big">कारख़ाना</div>
+      <div class="sub">booting Debian 12 in your browser — nothing leaves this tab</div>
+      <div id="bar"><div></div></div>
+      <div class="stage" id="stage">loading emulator…</div>
+    </div>
+
+    <script>
+      // Storage ladder + host independence: SW caches the 550MB+ engine artifacts
+      // (download once) and supplies COOP/COEP on hosts that can't set headers.
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./karkhana-sw.js').then(async (reg) => {
+          await navigator.serviceWorker.ready;
+          // coi-serviceworker pattern: if isolation is missing and the SW isn't
+          // controlling this load yet, reload once so headers apply.
+          if (!window.crossOriginIsolated && !navigator.serviceWorker.controller && !sessionStorage.getItem('kk-coi-reload')) {
+            sessionStorage.setItem('kk-coi-reload', '1');
+            location.reload();
+          }
+        }).catch((e) => console.warn('sw registration failed', e));
+      }
+    </script>
+    <script src="vendor/xterm.js"></script>
+    <script src="vendor/xterm-pty.js"></script>
+    <script>window.Module = {}; /* load.js is injected after the chunked engine is assembled */</script>
+    <script src="./dist/stack.js"></script>
+    <script type="module">
+      import './arg-module.js';
+      import initEmscriptenModule from './out.js';
+
+      const stateEl = document.getElementById('vmstate');
+      const overlay = document.getElementById('overlay');
+      const stageEl = document.getElementById('stage');
+      const barEl   = document.querySelector('#bar > div');
+      const setState = (s) => { stateEl.textContent = s; stateEl.className = s; };
+      const setStage = (t, pct) => { stageEl.textContent = t; if (pct != null) barEl.style.width = pct + '%'; };
+
+      // Surface the engine download (dominates first load; instant once SW-cached).
+      Module['setStatus'] = (s) => {
+        const m = /\((\d+)\/(\d+)\)/.exec(s || '');
+        if (m) setStage('downloading engine — ' + (+m[1] / 1048576 | 0) + ' / ' + (+m[2] / 1048576 | 0) + ' MB (cached after first load)', Math.min(30, Math.round((+m[1] / +m[2]) * 30)));
+      };
+
+      const xterm = new Terminal({
+        convertEol: true, fontSize: 13, cursorBlink: true,
+        theme: { background:'#08081a', foreground:'#f0d2a0', cursor:'#d83858',
+                 selectionBackground:'#2a2040', black:'#14142a', red:'#d83858',
+                 green:'#5aaa3a', yellow:'#d8a868', blue:'#4a6ad8', magenta:'#c8a868',
+                 cyan:'#a89868', white:'#f0d2a0' }
+      });
+      xterm.open(document.getElementById('terminal'));
+
+      const { master, slave } = openpty();
+      xterm.loadAddon(master);
+
+      // Fit: size cols/rows to the container; xterm-pty forwards the resize to the
+      // guest as TIOCGWINSZ + SIGWINCH — TUIs (ink/blessed/textual) need this.
+      const termHost = document.getElementById('terminal');
+      const fit = () => {
+        const core = xterm._core;
+        const cell = core && core._renderService && core._renderService.dimensions && core._renderService.dimensions.css.cell;
+        if (!cell || !cell.width || !cell.height) return;
+        const cols = Math.max(20, Math.floor((termHost.clientWidth - 20) / cell.width));
+        const rows = Math.max(6, Math.floor((termHost.clientHeight - 12) / cell.height));
+        if (cols !== xterm.cols || rows !== xterm.rows) xterm.resize(cols, rows);
+      };
+      new ResizeObserver(fit).observe(termHost);
+      setTimeout(fit, 300);
+      Module.pty = slave;
+      Module['mainScriptUrlOrBlob'] = location.origin + location.pathname.replace(/[^/]*$/, '') + 'out.js';
+      Module['preRun'] ??= [];
+
+      // ---- boot progress: watch guest output for stage markers ----
+      let booted = false, tail = '';
+      const dataListeners = [];
+      master.onWrite(([bytes]) => {
+        const text = new TextDecoder().decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+        dataListeners.forEach(cb => { try { cb(text); } catch (e) {} });
+        if (booted) return;
+        tail = (tail + text).slice(-2000);
+        if (/Linux version/.test(tail))            setStage('kernel up…', 35);
+        if (/mounting .*overlay/.test(tail))       setStage('mounting rootfs…', 60);
+        if (/executing\(pre-run\)/.test(tail))     setStage('starting Debian container…', 80);
+        if (/karkhana:|\$ $|# $/.test(tail)) {
+          booted = true; setState('shell'); setStage('ready', 100);
+          setTimeout(() => overlay.classList.add('gone'), 400);
+        }
+      });
+
+      // ---- networking: in-page gvisor stack (c2w-net-proxy) bridged to fetch() ----
+      // Guest gets a virtio NIC; every TCP connect lands on the mock WebSocket at
+      // stackAddress, served by the wasm network stack in a worker. HTTP(S) egress
+      // rides browser fetch() — CORS rules apply, nothing else leaves the tab.
+      const genmac = () => '02:XX:XX:XX:XX:XX'.replace(/X/g, () => '0123456789ABCDEF'[Math.floor(Math.random() * 16)]);
+      // Dev-mode relay: if a local c2w-net relay is listening (net/c2w-net -listen-ws
+      // localhost:8888), the guest gets REAL TCP/IP — no CORS limits, no MITM cert,
+      // full speed (pip/apt/git work unmodified). Absent relay -> in-page fetch stack.
+      const RELAY = 'ws://127.0.0.1:8888/';
+      const probeRelay = () => new Promise((resolve) => {
+        try {
+          const ws = new WebSocket(RELAY);
+          const t = setTimeout(() => { try { ws.close(); } catch (e) {} resolve(false); }, 5000);
+          ws.onopen = () => { clearTimeout(t); ws.close(); resolve(true); };
+          ws.onerror = () => { clearTimeout(t); resolve(false); };
+        } catch (e) { resolve(false); }
+      });
+      const netReady = (async () => {
+        if (await probeRelay()) return { mode: 'relay' };
+        return new Promise((resolve) => {
+          try {
+            const stackAddress = 'http://localhost:9999/';
+            Module['websocket'] = { url: stackAddress };
+            Stack.Start(stackAddress,
+                        location.origin + location.pathname.replace(/[^/]*$/, '') + 'dist/stack-worker.js',
+                        location.origin + location.pathname.replace(/[^/]*$/, '') + 'c2w-net-proxy.wasm.gzip',
+                        (cert) => resolve({ mode: 'browser-fetch', cert }));
+            setTimeout(() => resolve(null), 20000); // don't hold boot hostage if the stack stalls
+          } catch (e) { console.error('net stack failed to start', e); resolve(null); }
+        });
+      })();
+
+      // /pack/info drives container init (see c2w cmd/init)
+      Module['preRun'].push((mod) => {
+        try { mod.FS.mkdir('/pack'); } catch (e) {}
+        // placeholder; real content written in run() below before the VM starts
+      });
+
+      let readableCallbacks = [];
+      Module.pty.onReadable(() => { readableCallbacks.forEach(cb => cb()); readableCallbacks = []; });
+      Module['preRun'].push((mod) => {
+        mod['TTY'].stream_ops.poll = (stream, timeout, notifyCallback) => {
+          if (mod.pty.readable) return 1;
+          if (notifyCallback != null) {
+            notifyCallback.registerCleanupFunc(() => {
+              const i = readableCallbacks.indexOf(notifyCallback);
+              if (i != -1) readableCallbacks.splice(i, 1);
+            });
+            readableCallbacks.push(notifyCallback);
+          }
+          return 0;
+        };
+      });
+
+      // ---- agent face: window.karkhana (same seam the v86 build exposed) ----
+      window.karkhana = {
+        engine: 'qemu-wasm',
+        shell: {
+          send: (text) => slave.ldisc.writeFromLower(text),
+          exec: (cmd)  => slave.ldisc.writeFromLower(cmd + '\r'),
+          onData: (cb) => { dataListeners.push(cb); return () => { const i = dataListeners.indexOf(cb); if (i !== -1) dataListeners.splice(i, 1); }; },
+        },
+        vm: { get state() { return stateEl.textContent; } },
+        pty: slave,
+        // v1 persistence: guest runs `tar -cf /persist/state.tar <dirs>`, then
+        // pull() mirrors the bytes to OPFS; next boot's preRun restores them and
+        // the guest runs `tar -xf /persist/state.tar -C /` to reinstate.
+        persist: {
+          pull: async () => {
+            const data = Module.FS.readFile('/persist/state.tar');
+            const root = await navigator.storage.getDirectory();
+            const dir = await root.getDirectoryHandle('karkhana-persist', { create: true });
+            const fh = await dir.getFileHandle('state.tar', { create: true });
+            const w = await fh.createWritable();
+            await w.write(data); await w.close();
+            return data.length;
+          },
+          forget: async () => {
+            const root = await navigator.storage.getDirectory();
+            const dir = await root.getDirectoryHandle('karkhana-persist', { create: true });
+            await dir.removeEntry('state.tar');
+          },
+          get restored() { return !!window.karkhana._persistRestored; },
+        },
+        // ---- AI ladder (naklios two-tier bifurcation) ----
+        // GP tier: Chrome built-in Gemini Nano — on-device, free, private. Fine for
+        // general queries, useless for coding (by design, never offered to the agent).
+        // Agent tier: the user's configured endpoint (BYOK) — never Nano.
+        ai: {
+          gp: {
+            probe: async () => {
+              try {
+                const LM = window.LanguageModel || (window.ai && window.ai.languageModel);
+                if (!LM) return 'unsupported';
+                return await (LM.availability ? LM.availability() : LM.capabilities().then(c => c.available));
+              } catch (e) { return 'error:' + e.message; }
+            },
+            ask: async (prompt, opts = {}) => {
+              const LM = window.LanguageModel || (window.ai && window.ai.languageModel);
+              if (!LM) throw new Error('Nano unavailable: no LanguageModel API');
+              const session = await LM.create(opts.createOptions || {});
+              try { return await session.prompt(prompt); } finally { session.destroy && session.destroy(); }
+            },
+          },
+          agent: {
+            get config() { try { return JSON.parse(localStorage.getItem('karkhana-ai-agent')) || null; } catch (e) { return null; } },
+            // {endpoint, model, key} — key stays browser-side; mirrored to IDB so the
+            // SW bridge (api.karkhana.internal) can inject Authorization for the guest.
+            set config(c) {
+              localStorage.setItem('karkhana-ai-agent', JSON.stringify(c));
+              const open = indexedDB.open('karkhana', 1);
+              open.onupgradeneeded = () => open.result.createObjectStore('kv');
+              open.onsuccess = () => open.result.transaction('kv', 'readwrite').objectStore('kv').put(c, 'ai-agent');
+            },
+          },
+          // naklios rule: wantsAgent -> endpoint or nothing; GP -> Nano first.
+          resolve: async (wantsAgent) => {
+            const agentCfg = window.karkhana.ai.agent.config;
+            if (wantsAgent) return agentCfg ? { tier: 'agent', ...agentCfg } : null;
+            const avail = await window.karkhana.ai.gp.probe();
+            if (avail === 'available' || avail === 'readily') return { tier: 'gp', model: 'Gemini Nano (on-device)' };
+            return agentCfg ? { tier: 'agent', ...agentCfg } : null;
+          },
+        },
+      };
+
+      // ---- settings panel (writes karkhana.ai.agent.config -> localStorage + IDB) ----
+      {
+        const panel = document.getElementById('cfgpanel');
+        const $ = (id) => document.getElementById(id);
+        const load = () => {
+          const c = window.karkhana.ai.agent.config || {};
+          $('cfg-endpoint').value = c.endpoint || ''; $('cfg-model').value = c.model || ''; $('cfg-key').value = c.key || '';
+        };
+        $('cfgbtn').addEventListener('click', () => { panel.hidden = !panel.hidden; if (!panel.hidden) load(); });
+        $('cfg-nano').addEventListener('click', () => { $('cfg-endpoint').value = 'builtin:nano'; $('cfg-model').value = 'gemini-nano'; $('cfg-key').value = ''; });
+        $('cfg-save').addEventListener('click', () => {
+          window.karkhana.ai.agent.config = { endpoint: $('cfg-endpoint').value.trim(), model: $('cfg-model').value.trim(), key: $('cfg-key').value.trim() };
+          $('cfg-note').textContent = 'saved'; setTimeout(() => { $('cfg-note').textContent = ''; }, 2000);
+        });
+      }
+
+      // SW relay: guest -> bridge -> here -> on-device Nano -> back to guest.
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', (e) => {
+          if (e.data && e.data.type === 'karkhana-nano' && e.ports[0]) {
+            window.karkhana.ai.gp.ask(e.data.prompt)
+              .then((answer) => e.ports[0].postMessage({ ok: true, answer }))
+              .catch((err) => e.ports[0].postMessage({ ok: false, error: err.message }));
+          }
+        });
+      }
+
+      setState('booting'); setStage('starting network stack…', 5);
+      (async () => {
+        try {
+          const net = await netReady;
+          let info = 't:' + Math.round(Date.now() / 1000) + '\n';
+          // persistent dir: c2w init bind-mounts host-FS /persist into the container
+          // (the same 'm:' mechanism that delivers the TLS cert dir).
+          // v1 persistence = tar-into-preallocated-file: guest-side CREATE over 9p is
+          // broken upstream (ENOENT surfaces as ECHRNG) but writes into EXISTING files
+          // work — so JS pre-creates state.tar (restored from OPFS when present) and
+          // the guest tars into it. karkhana.persist.pull() mirrors it back to OPFS.
+          const opfsState = await (async () => {
+            try {
+              const root = await navigator.storage.getDirectory();
+              const dir = await root.getDirectoryHandle('karkhana-persist', { create: true });
+              try {
+                const fh = await dir.getFileHandle('state.tar');
+                const f = await fh.getFile();
+                if (f.size > 0) return new Uint8Array(await f.arrayBuffer());
+              } catch (e) {}
+            } catch (e) { console.warn('opfs unavailable', e); }
+            return null;
+          })();
+          try { navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
+          Module['preRun'].push((mod) => {
+            try { mod.FS.mkdir('/persist'); } catch (e) {}
+            mod.FS.writeFile('/persist/state.tar', opfsState || new Uint8Array(0));
+            mod.FS.writeFile('/persist/.ksave-done', '0'); // pre-created: guest bumps it after ksave
+          });
+          window.karkhana._persistRestored = !!opfsState;
+          info += 'm: persist\n';
+
+          // auto-pull: when the guest's ksave bumps the nonce, mirror state.tar to OPFS
+          let lastKsaveNonce = '0';
+          setInterval(async () => {
+            try {
+              const v = new TextDecoder().decode(Module.FS.readFile('/persist/.ksave-done')).trim();
+              if (v !== lastKsaveNonce) {
+                lastKsaveNonce = v;
+                if (v !== '0') {
+                  const n = await window.karkhana.persist.pull();
+                  console.log('karkhana: ksave detected — pulled ' + n + ' bytes to OPFS');
+                }
+              }
+            } catch (e) {}
+          }, 4000);
+          if (net && net.mode === 'relay') {
+            // real TCP via local relay — no proxy env, no cert; DHCP against the relay's stack
+            window.karkhana.net = { mode: 'relay', cert: false };
+            Module['websocket'] = { url: RELAY, subprotocol: null }; // x/net/websocket won't echo 'binary'; Chrome kills mismatched-subprotocol sockets
+            info += 'n:' + genmac() + '\n';
+          } else if (net && net.cert) {
+            window.karkhana.net = { mode: 'browser-fetch', cert: true };
+            const cert = net.cert;
+            Module['preRun'].push((mod) => {
+              try { mod.FS.mkdir('/.wasmenv'); } catch (e) {}
+              mod.FS.writeFile('/.wasmenv/proxy.crt', cert);
+            });
+            info += 'n:' + genmac() + '\n';
+            info += 'm: .wasmenv\nenv: SSL_CERT_FILE=/.wasmenv/proxy.crt\nenv: https_proxy=http://192.168.127.253:80\nenv: http_proxy=http://192.168.127.253:80\nenv: HTTPS_PROXY=http://192.168.127.253:80\nenv: HTTP_PROXY=http://192.168.127.253:80';
+          } else {
+            window.karkhana.net = { mode: 'offline', cert: false };
+          }
+          Module['preRun'].push((mod) => {
+            try { mod.FS.mkdir('/pack'); } catch (e) {}
+            mod.FS.writeFile('/pack/info', info);
+          });
+          // Chunked engine: parts live in the repo (CF Pages 25MB/file cap);
+          // assemble to Blobs, cache the assembled result, hand emscripten blob URLs.
+          const engineUrls = {};
+          {
+            const mf = await (await fetch('engine/engine-manifest.json')).json();
+            const cache = await caches.open('karkhana-engine-v1').catch(() => null);
+            let done = 0;
+            const total = Object.values(mf).reduce((a, f) => a + f.size, 0);
+            for (const [name, f] of Object.entries(mf)) {
+              const key = '/assembled/' + name;
+              let resp = cache && await cache.match(key);
+              if (!resp) {
+                const bufs = [];
+                for (const part of f.parts) {
+                  const b = await (await fetch('engine/' + part)).arrayBuffer();
+                  bufs.push(b); done += b.byteLength;
+                  setStage('downloading engine — ' + (done / 1048576 | 0) + ' / ' + (total / 1048576 | 0) + ' MB (cached after first load)', Math.min(30, Math.round(done / total * 30)));
+                }
+                const blob = new Blob(bufs, { type: name.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream' });
+                if (cache) { try { await cache.put(key, new Response(blob)); } catch (e) {} }
+                engineUrls[name] = URL.createObjectURL(blob);
+              } else {
+                done += f.size;
+                engineUrls[name] = URL.createObjectURL(await resp.blob());
+              }
+            }
+            Module['locateFile'] = (path) => {
+              for (const name of Object.keys(engineUrls)) if (path.indexOf(name) !== -1) return engineUrls[name];
+              return path;
+            };
+            await new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'load.js'; sc.onload = res; sc.onerror = rej; document.head.appendChild(sc); });
+          }
+          setStage('starting emulator…', 10);
+          await initEmscriptenModule(Module);
+        } catch (e) {
+          setState('panicked'); setStage('panicked — ' + e, 100);
+          overlay.classList.remove('gone');
+          console.error(e);
+        }
+      })();
+    </script>
+  </body>
+</html>
