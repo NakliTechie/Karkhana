@@ -162,7 +162,7 @@
       const probeRelay = () => new Promise((resolve) => {
         try {
           const ws = new WebSocket(RELAY);
-          const t = setTimeout(() => { try { ws.close(); } catch (e) {} resolve(false); }, 1500);
+          const t = setTimeout(() => { try { ws.close(); } catch (e) {} resolve(false); }, 5000);
           ws.onopen = () => { clearTimeout(t); ws.close(); resolve(true); };
           ws.onerror = () => { clearTimeout(t); resolve(false); };
         } catch (e) { resolve(false); }
@@ -291,7 +291,7 @@
           if (net && net.mode === 'relay') {
             // real TCP via local relay — no proxy env, no cert; DHCP against the relay's stack
             window.karkhana.net = { mode: 'relay', cert: false };
-            Module['websocket'] = { url: RELAY };
+            Module['websocket'] = { url: RELAY, subprotocol: null }; // x/net/websocket won't echo 'binary'; Chrome kills mismatched-subprotocol sockets
             info += 'n:' + genmac() + '\n';
           } else if (net && net.cert) {
             window.karkhana.net = { mode: 'browser-fetch', cert: true };

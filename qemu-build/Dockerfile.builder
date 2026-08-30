@@ -752,7 +752,7 @@ RUN apt-get update && apt-get install -y gettext-base && mkdir /out
 COPY --link --from=assets /config/qemu/args-x86_64.json.template /args.json.template
 # Karkhana carried patch: modern CPU features (SSE4/AVX2 via TCG) so Bun/Go/Rust
 # release binaries run; default qemu64 model is SSE2-era and traps them.
-RUN sed -i 's/"-nographic",/"-cpu", "Nehalem", "-nographic",/' /args.json.template
+RUN true # cpu-model patch parked: qemu64 default; max panics, Nehalem hangs on wasm TCG
 RUN MIGRATION_FLAGS= ; \
     if test "${QEMU_MIGRATION}" = "true"  ; then \
       MIGRATION_FLAGS='"-incoming", "file:/pack/vm.state",' ; \
