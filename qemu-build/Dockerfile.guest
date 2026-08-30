@@ -1,0 +1,55 @@
+# Karkhana guest userland — modern 64-bit glibc Debian for qemu-wasm.
+# Replaces the v86 32-bit musl Alpine. This image is the container workload
+# c2w runs inside the qemu-wasm micro-VM; its rootfs becomes the browser guest.
+FROM debian:12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Non-anemic userland: real glibc, Python 3.11 with working native pip wheels,
+# Node.js for TUIs, plus the tools a coding agent expects.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash coreutils ca-certificates \
+      python3 python3-pip python3-venv \
+      nodejs npm \
+      sqlite3 curl git less nano procps iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN printf '\nKarkhana / \340\244\225\340\244\276\340\244\260\340\244\226\340\274\200\340\244\250\340\244\276 \342\200\224 Debian 12 (glibc) on qemu-wasm\nType "agent" (python) or run a node TUI.\n' > /etc/motd \
+    && echo 'root:x:0:0:root:/root:/bin/bash' > /etc/passwd \
+    && echo 'PS1="karkhana:\w\$ "' >> /root/.bashrc
+
+# The coding agent: OpenAI protocol to the browser-side bridge; keys stay outside the VM.
+COPY guest/agent.py /usr/bin/agent
+RUN chmod +x /usr/bin/agent
+
+# TUIs (ink/blessed/textual) want a capable TERM; xterm.js speaks 256color.
+RUN echo 'export TERM=xterm-256color' >> /root/.bashrc \
+    && echo 'export NODE_EXTRA_CA_CERTS=/.wasmenv/proxy.crt' >> /root/.bashrc
+
+# crng warm-up: TLS (git/pip/node) blocks in getrandom() until the kernel's
+# entropy pool initializes — minutes under TCG unless something blocks on
+# /dev/random, which triggers the kernel's active jitter-entropy loop. Kick it
+# at login so crypto is ready by the time the user runs a network command.
+# (Durable fix = CONFIG_HW_RANDOM_VIRTIO + virtio-rng device; kernel rebuild, parked.)
+RUN echo '(head -c1 /dev/random >/dev/null 2>&1 &)' >> /root/.bashrc
+
+# uv baked in (pip's vendored urllib3 stalls against the in-tab proxy; uv works).
+RUN pip3 install --break-system-packages uv
+
+# kpip: python package installs tuned for the browser proxy — http index (the
+# proxy's https://pypi.org leg stalls; browser fetch upgrades http itself) and
+# allow-insecure-host for the in-tab MITM cert that rustls rejects (BadEncoding).
+RUN printf '#!/bin/sh\nexec uv pip install --system --break-system-packages --index-url http://pypi.org/simple/ --allow-insecure-host pypi.org --allow-insecure-host files.pythonhosted.org "$@"\n' > /usr/local/bin/kpip \
+    && chmod +x /usr/local/bin/kpip
+
+# Persistence: ksave tars mutable state INTO the pre-created /persist/state.tar
+# (guest-side file CREATE over 9p is broken upstream; writes into existing files
+# work), then bumps the pre-created .ksave-done nonce so the page auto-pulls the
+# bytes to OPFS. krestore (also run automatically at first login) reinstates.
+RUN printf '#!/bin/sh\ntar -cf /persist/state.tar -C / --exclude=root/.cache --exclude=root/.npm usr/local root 2>/dev/null && echo "ksave: $(wc -c </persist/state.tar) bytes staged" && date +%%s > /persist/.ksave-done\n' > /usr/local/bin/ksave \
+    && printf '#!/bin/sh\n[ -s /persist/state.tar ] && tar -xf /persist/state.tar -C / 2>/dev/null && echo "krestore: state reinstated"\n' > /usr/local/bin/krestore \
+    && chmod +x /usr/local/bin/ksave /usr/local/bin/krestore \
+    && printf '[ -s /persist/state.tar ] && [ ! -f /tmp/.krestored ] && tar -xf /persist/state.tar -C / 2>/dev/null && touch /tmp/.krestored && echo "karkhana: saved state restored (krestore)"\n' >> /root/.bashrc
+
+WORKDIR /root
+CMD ["/bin/bash"]
