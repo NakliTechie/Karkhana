@@ -48,14 +48,17 @@ agent tier → BYOK endpoint (key stays in the browser; SW injects it at
 
 ## Known issues
 
-- **9p ENOENT→ECHRNG (upstream, diagnosed, unfiled):** guest-side file CREATE on
-  the /persist mount fails "Channel number out of range" — emscripten uses WASI
-  errno numbering (NOENT=44) and qemu-wasm's `errno_to_dotl()` doesn't translate;
-  Linux 44=ECHRNG. Writes into existing files work (ksave design leans on this).
+- **9p WASI-errno mistranslation — FIXED by our carried patch** (upstream:
+  issue ktock/qemu-wasm#45, PR ktock/qemu-wasm#46; builder compiles from
+  NakliTechie/qemu-wasm `build/9p-fix-8604`). Lookup-miss now returns ENOENT
+  correctly. Follow-up bug surfaced by honest errnos: guest-side file CREATE on
+  virtfs still fails with a genuine EPERM (local-backend create path; both
+  security models) — to be filed upstream. ksave/tar persistence unaffected.
 - **Bun binaries trap** (opencode etc.): need SSE4.2+; wasm TCG's qemu64 is
   SSE2-era; `-cpu max` kernel-panics, `Nehalem` hangs (seam kept in
   Dockerfile.builder). Prebuilt Go/baseline-Rust binaries run fine (uv proves it).
 - **Guest RAM ceiling:** 2048M fails silently (wasm heap is 3000M at QEMU
   compile); stay at 1024M until the heap build-arg is raised.
-- **Entropy:** no virtio-rng in the guest kernel (config lacks
-  CONFIG_HW_RANDOM_VIRTIO — durable fix is a kernel-config carried patch).
+- **Entropy: FIXED** — carried kernel patch adds CONFIG_HW_RANDOM_VIRTIO +
+  `-device virtio-rng-pci`; crng init at ~2.4 guest-seconds (was 90-560 s).
+  TLS entropy stalls (git/node first-use hangs) are gone.
