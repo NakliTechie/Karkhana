@@ -35,5 +35,14 @@ RUN pip3 install --break-system-packages uv
 RUN printf '#!/bin/sh\nexec uv pip install --system --break-system-packages --index-url http://pypi.org/simple/ --allow-insecure-host pypi.org --allow-insecure-host files.pythonhosted.org "$@"\n' > /usr/local/bin/kpip \
     && chmod +x /usr/local/bin/kpip
 
+# Persistence: ksave tars mutable state INTO the pre-created /persist/state.tar
+# (guest-side file CREATE over 9p is broken upstream; writes into existing files
+# work), then bumps the pre-created .ksave-done nonce so the page auto-pulls the
+# bytes to OPFS. krestore (also run automatically at first login) reinstates.
+RUN printf '#!/bin/sh\ntar -cf /persist/state.tar -C / --exclude=root/.cache --exclude=root/.npm usr/local root 2>/dev/null && echo "ksave: $(wc -c </persist/state.tar) bytes staged" && date +%%s > /persist/.ksave-done\n' > /usr/local/bin/ksave \
+    && printf '#!/bin/sh\n[ -s /persist/state.tar ] && tar -xf /persist/state.tar -C / 2>/dev/null && echo "krestore: state reinstated"\n' > /usr/local/bin/krestore \
+    && chmod +x /usr/local/bin/ksave /usr/local/bin/krestore \
+    && printf '[ -s /persist/state.tar ] && [ ! -f /tmp/.krestored ] && tar -xf /persist/state.tar -C / 2>/dev/null && touch /tmp/.krestored && echo "karkhana: saved state restored (krestore)"\n' >> /root/.bashrc
+
 WORKDIR /root
 CMD ["/bin/bash"]

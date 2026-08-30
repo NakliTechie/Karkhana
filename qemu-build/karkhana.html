@@ -330,9 +330,25 @@
           Module['preRun'].push((mod) => {
             try { mod.FS.mkdir('/persist'); } catch (e) {}
             mod.FS.writeFile('/persist/state.tar', opfsState || new Uint8Array(0));
+            mod.FS.writeFile('/persist/.ksave-done', '0'); // pre-created: guest bumps it after ksave
           });
           window.karkhana._persistRestored = !!opfsState;
           info += 'm: persist\n';
+
+          // auto-pull: when the guest's ksave bumps the nonce, mirror state.tar to OPFS
+          let lastKsaveNonce = '0';
+          setInterval(async () => {
+            try {
+              const v = new TextDecoder().decode(Module.FS.readFile('/persist/.ksave-done')).trim();
+              if (v !== lastKsaveNonce) {
+                lastKsaveNonce = v;
+                if (v !== '0') {
+                  const n = await window.karkhana.persist.pull();
+                  console.log('karkhana: ksave detected — pulled ' + n + ' bytes to OPFS');
+                }
+              }
+            } catch (e) {}
+          }, 4000);
           if (net && net.mode === 'relay') {
             // real TCP via local relay — no proxy env, no cert; DHCP against the relay's stack
             window.karkhana.net = { mode: 'relay', cert: false };
