@@ -35,8 +35,8 @@ ARG TINYEMU_REPO_VERSION=e4e9bd198f9c0505ab4c77a6a9d038059cd1474a
 ARG BOCHS_REPO=https://github.com/ktock/Bochs
 ARG BOCHS_REPO_VERSION=a88d1f687ec83ff82b5318f59dcecb8dab44fc83
 
-ARG QEMU_REPO=https://github.com/ktock/qemu-wasm
-ARG QEMU_REPO_VERSION=8604ed49a3cde392890b014a8d5a959c8a2fe72a
+ARG QEMU_REPO=https://github.com/NakliTechie/qemu-wasm
+ARG QEMU_REPO_VERSION=9f2acf64bccf2e654fd2d9b0b2bb6dc65d56a0c8
 
 ARG SOURCE_REPO=https://github.com/ktock/container2wasm
 ARG SOURCE_REPO_VERSION=v0.8.4
@@ -693,6 +693,9 @@ FROM linux-amd64-dev-common AS linux-amd64-dev-qemu
 RUN apt-get install -y libelf-dev
 WORKDIR /work-buildlinux/linux
 COPY --link --from=assets ./config/qemu/linux_x86_config ./.config
+# Karkhana carried patch: virtio-rng so the crng initializes at boot instead of
+# blocking TLS (getrandom) for minutes under TCG jitter-entropy.
+RUN echo 'CONFIG_HW_RANDOM_VIRTIO=y' >> .config
 RUN make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- -j$(nproc) all && \
     mkdir /out && \
     mv /work-buildlinux/linux/arch/x86/boot/bzImage /out/bzImage && \
@@ -754,6 +757,7 @@ COPY --link --from=assets /config/qemu/args-x86_64.json.template /args.json.temp
 # release binaries run; default qemu64 model is SSE2-era and traps them.
 RUN true # cpu-model patch parked: qemu64 default; max panics, Nehalem hangs on wasm TCG
 RUN sed -i 's/security_model=passthrough,id=wasi0/security_model=none,id=wasi0/' /args.json.template
+RUN sed -i 's/"-nographic",/"-object", "rng-builtin,id=rng0", "-device", "virtio-rng-pci,rng=rng0", "-nographic",/' /args.json.template
 RUN MIGRATION_FLAGS= ; \
     if test "${QEMU_MIGRATION}" = "true"  ; then \
       MIGRATION_FLAGS='"-incoming", "file:/pack/vm.state",' ; \
