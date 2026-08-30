@@ -25,6 +25,7 @@ mkdir -p "$OUT"
   --build-arg VM_MEMORY_SIZE_MB=1024 \
   --build-arg LINUX_LOGLEVEL=7 \
   --build-arg QEMU_MIGRATION=true \
+  --build-arg VM_CORE_NUMS=4 \
   "$IMG" "$OUT"
 
 echo "==> Done. Artifacts in $OUT :"

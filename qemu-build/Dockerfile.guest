@@ -22,5 +22,8 @@ RUN printf '\nKarkhana / \340\244\225\340\244\276\340\244\260\340\244\226\340\27
 COPY guest/agent.py /usr/bin/agent
 RUN chmod +x /usr/bin/agent
 
+# TUIs (ink/blessed/textual) want a capable TERM; xterm.js speaks 256color.
+RUN echo 'export TERM=xterm-256color' >> /root/.bashrc
+
 WORKDIR /root
 CMD ["/bin/bash"]
