@@ -82,7 +82,7 @@ FROM ubuntu:22.04 AS qemu-repo-base
 ARG QEMU_REPO
 ARG QEMU_REPO_VERSION
 RUN apt-get update && apt-get install -y git
-RUN git clone --depth 100 ${QEMU_REPO} /qemu && \
+RUN git clone --depth 100 --branch build/9p-fix-8604 ${QEMU_REPO} /qemu && \
     cd /qemu && \
     git checkout ${QEMU_REPO_VERSION} && \
     git clone https://gitlab.com/qemu-project/dtc.git subprojects/dtc && \

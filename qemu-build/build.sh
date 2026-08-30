@@ -23,7 +23,7 @@ mkdir -p "$OUT"
   --dockerfile "$DOCKERFILE" \
   --build-arg SOURCE_REPO_VERSION=main \
   --build-arg VM_MEMORY_SIZE_MB=1024 \
-  --build-arg LINUX_LOGLEVEL=7 \
+  --build-arg LINUX_LOGLEVEL=0 \
   --build-arg QEMU_MIGRATION=true \
   --build-arg VM_CORE_NUMS=4 \
   "$IMG" "$OUT"
