@@ -29,14 +29,36 @@
       #bar { width:280px; height:4px; background:var(--kk-row); border:1px solid var(--kk-line); }
       #bar > div { height:100%; width:0%; background:var(--kk-act); transition:width .4s; }
       footer { padding:4px 14px; font-size:11px; color:var(--kk-ink-mute); border-top:1px solid var(--kk-line); }
+      #cfgbtn { margin-left:auto; background:none; border:1px solid var(--kk-line); color:var(--kk-ink-soft); border-radius:3px; cursor:pointer; padding:1px 8px; font-size:13px; }
+      #cfgbtn:hover { color:var(--kk-ink); border-color:var(--kk-ink-mute); }
+      #vmstate { margin-left:0; }
+      #cfgpanel { background:var(--kk-panel); border-bottom:1px solid var(--kk-line); padding:10px 14px; display:flex; flex-direction:column; gap:8px; font-size:12px; }
+      #cfgpanel .row { display:flex; align-items:center; gap:10px; }
+      #cfgpanel label { width:64px; color:var(--kk-ink-soft); }
+      #cfgpanel input { flex:1; max-width:480px; background:var(--kk-row); border:1px solid var(--kk-line); color:var(--kk-ink); padding:4px 8px; border-radius:3px; font:inherit; }
+      #cfgpanel input:focus { outline:none; border-color:var(--kk-act); }
+      #cfgpanel .actions button { background:var(--kk-row); border:1px solid var(--kk-line); color:var(--kk-ink-mid); padding:3px 10px; border-radius:3px; cursor:pointer; font:inherit; }
+      #cfgpanel .actions button:hover { border-color:var(--kk-act); color:var(--kk-ink); }
+      #cfg-note { color:var(--kk-ok); }
     </style>
   </head>
   <body>
     <header>
       <span class="brand">KARKHANA</span><span class="devanagari">कारख़ाना</span>
       <span style="color:var(--kk-ink-mute)">Debian 12 · glibc · python3 · node — qemu-wasm engine</span>
+      <button id="cfgbtn" title="Agent AI settings">⚙</button>
       <span id="vmstate">stopped</span>
     </header>
+    <div id="cfgpanel" hidden>
+      <div class="row"><label>Endpoint</label><input id="cfg-endpoint" placeholder="https://openrouter.ai/api  ·  or builtin:nano" /></div>
+      <div class="row"><label>Model</label><input id="cfg-model" placeholder="e.g. deepseek/deepseek-chat" /></div>
+      <div class="row"><label>API key</label><input id="cfg-key" type="password" placeholder="stays in this browser — never enters the VM" /></div>
+      <div class="row actions">
+        <button id="cfg-nano">use on-device Nano (GP only)</button>
+        <button id="cfg-save">save</button>
+        <span id="cfg-note"></span>
+      </div>
+    </div>
     <div id="terminal"></div>
     <footer>engine: qemu-wasm (x86_64, TCG) · guest: Debian 12 bookworm · first boot takes minutes, the page is not stuck</footer>
     <div id="overlay">
@@ -93,6 +115,20 @@
 
       const { master, slave } = openpty();
       xterm.loadAddon(master);
+
+      // Fit: size cols/rows to the container; xterm-pty forwards the resize to the
+      // guest as TIOCGWINSZ + SIGWINCH — TUIs (ink/blessed/textual) need this.
+      const termHost = document.getElementById('terminal');
+      const fit = () => {
+        const core = xterm._core;
+        const cell = core && core._renderService && core._renderService.dimensions && core._renderService.dimensions.css.cell;
+        if (!cell || !cell.width || !cell.height) return;
+        const cols = Math.max(20, Math.floor((termHost.clientWidth - 20) / cell.width));
+        const rows = Math.max(6, Math.floor((termHost.clientHeight - 12) / cell.height));
+        if (cols !== xterm.cols || rows !== xterm.rows) xterm.resize(cols, rows);
+      };
+      new ResizeObserver(fit).observe(termHost);
+      setTimeout(fit, 300);
       Module.pty = slave;
       Module['mainScriptUrlOrBlob'] = location.origin + location.pathname.replace(/[^/]*$/, '') + 'out.js';
       Module['preRun'] ??= [];
@@ -204,6 +240,22 @@
           },
         },
       };
+
+      // ---- settings panel (writes karkhana.ai.agent.config -> localStorage + IDB) ----
+      {
+        const panel = document.getElementById('cfgpanel');
+        const $ = (id) => document.getElementById(id);
+        const load = () => {
+          const c = window.karkhana.ai.agent.config || {};
+          $('cfg-endpoint').value = c.endpoint || ''; $('cfg-model').value = c.model || ''; $('cfg-key').value = c.key || '';
+        };
+        $('cfgbtn').addEventListener('click', () => { panel.hidden = !panel.hidden; if (!panel.hidden) load(); });
+        $('cfg-nano').addEventListener('click', () => { $('cfg-endpoint').value = 'builtin:nano'; $('cfg-model').value = 'gemini-nano'; $('cfg-key').value = ''; });
+        $('cfg-save').addEventListener('click', () => {
+          window.karkhana.ai.agent.config = { endpoint: $('cfg-endpoint').value.trim(), model: $('cfg-model').value.trim(), key: $('cfg-key').value.trim() };
+          $('cfg-note').textContent = 'saved'; setTimeout(() => { $('cfg-note').textContent = ''; }, 2000);
+        });
+      }
 
       // SW relay: guest -> bridge -> here -> on-device Nano -> back to guest.
       if ('serviceWorker' in navigator) {

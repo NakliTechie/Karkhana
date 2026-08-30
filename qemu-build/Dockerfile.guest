@@ -23,7 +23,17 @@ COPY guest/agent.py /usr/bin/agent
 RUN chmod +x /usr/bin/agent
 
 # TUIs (ink/blessed/textual) want a capable TERM; xterm.js speaks 256color.
-RUN echo 'export TERM=xterm-256color' >> /root/.bashrc
+RUN echo 'export TERM=xterm-256color' >> /root/.bashrc \
+    && echo 'export NODE_EXTRA_CA_CERTS=/.wasmenv/proxy.crt' >> /root/.bashrc
+
+# uv baked in (pip's vendored urllib3 stalls against the in-tab proxy; uv works).
+RUN pip3 install --break-system-packages uv
+
+# kpip: python package installs tuned for the browser proxy — http index (the
+# proxy's https://pypi.org leg stalls; browser fetch upgrades http itself) and
+# allow-insecure-host for the in-tab MITM cert that rustls rejects (BadEncoding).
+RUN printf '#!/bin/sh\nexec uv pip install --system --break-system-packages --index-url http://pypi.org/simple/ --allow-insecure-host pypi.org --allow-insecure-host files.pythonhosted.org "$@"\n' > /usr/local/bin/kpip \
+    && chmod +x /usr/local/bin/kpip
 
 WORKDIR /root
 CMD ["/bin/bash"]
