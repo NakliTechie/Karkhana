@@ -753,6 +753,7 @@ COPY --link --from=assets /config/qemu/args-x86_64.json.template /args.json.temp
 # Karkhana carried patch: modern CPU features (SSE4/AVX2 via TCG) so Bun/Go/Rust
 # release binaries run; default qemu64 model is SSE2-era and traps them.
 RUN true # cpu-model patch parked: qemu64 default; max panics, Nehalem hangs on wasm TCG
+RUN sed -i 's/security_model=passthrough,id=wasi0/security_model=none,id=wasi0/' /args.json.template
 RUN MIGRATION_FLAGS= ; \
     if test "${QEMU_MIGRATION}" = "true"  ; then \
       MIGRATION_FLAGS='"-incoming", "file:/pack/vm.state",' ; \

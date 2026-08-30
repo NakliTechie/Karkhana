@@ -214,6 +214,26 @@
         },
         vm: { get state() { return stateEl.textContent; } },
         pty: slave,
+        // v1 persistence: guest runs `tar -cf /persist/state.tar <dirs>`, then
+        // pull() mirrors the bytes to OPFS; next boot's preRun restores them and
+        // the guest runs `tar -xf /persist/state.tar -C /` to reinstate.
+        persist: {
+          pull: async () => {
+            const data = Module.FS.readFile('/persist/state.tar');
+            const root = await navigator.storage.getDirectory();
+            const dir = await root.getDirectoryHandle('karkhana-persist', { create: true });
+            const fh = await dir.getFileHandle('state.tar', { create: true });
+            const w = await fh.createWritable();
+            await w.write(data); await w.close();
+            return data.length;
+          },
+          forget: async () => {
+            const root = await navigator.storage.getDirectory();
+            const dir = await root.getDirectoryHandle('karkhana-persist', { create: true });
+            await dir.removeEntry('state.tar');
+          },
+          get restored() { return !!window.karkhana._persistRestored; },
+        },
         // ---- AI ladder (naklios two-tier bifurcation) ----
         // GP tier: Chrome built-in Gemini Nano — on-device, free, private. Fine for
         // general queries, useless for coding (by design, never offered to the agent).
@@ -288,6 +308,31 @@
         try {
           const net = await netReady;
           let info = 't:' + Math.round(Date.now() / 1000) + '\n';
+          // persistent dir: c2w init bind-mounts host-FS /persist into the container
+          // (the same 'm:' mechanism that delivers the TLS cert dir).
+          // v1 persistence = tar-into-preallocated-file: guest-side CREATE over 9p is
+          // broken upstream (ENOENT surfaces as ECHRNG) but writes into EXISTING files
+          // work — so JS pre-creates state.tar (restored from OPFS when present) and
+          // the guest tars into it. karkhana.persist.pull() mirrors it back to OPFS.
+          const opfsState = await (async () => {
+            try {
+              const root = await navigator.storage.getDirectory();
+              const dir = await root.getDirectoryHandle('karkhana-persist', { create: true });
+              try {
+                const fh = await dir.getFileHandle('state.tar');
+                const f = await fh.getFile();
+                if (f.size > 0) return new Uint8Array(await f.arrayBuffer());
+              } catch (e) {}
+            } catch (e) { console.warn('opfs unavailable', e); }
+            return null;
+          })();
+          try { navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
+          Module['preRun'].push((mod) => {
+            try { mod.FS.mkdir('/persist'); } catch (e) {}
+            mod.FS.writeFile('/persist/state.tar', opfsState || new Uint8Array(0));
+          });
+          window.karkhana._persistRestored = !!opfsState;
+          info += 'm: persist\n';
           if (net && net.mode === 'relay') {
             // real TCP via local relay — no proxy env, no cert; DHCP against the relay's stack
             window.karkhana.net = { mode: 'relay', cert: false };
