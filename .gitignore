@@ -31,3 +31,8 @@ images/alpine-rootfs-flat/*
 alpine-build/*
 !alpine-build/Dockerfile
 !alpine-build/build.sh
+
+# qemu-wasm engine (chunked for the 25MB Pages cap; assembled in-page)
+!_headers
+!next/
+!next/**
