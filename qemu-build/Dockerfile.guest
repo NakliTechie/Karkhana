@@ -26,6 +26,13 @@ RUN chmod +x /usr/bin/agent
 RUN echo 'export TERM=xterm-256color' >> /root/.bashrc \
     && echo 'export NODE_EXTRA_CA_CERTS=/.wasmenv/proxy.crt' >> /root/.bashrc
 
+# crng warm-up: TLS (git/pip/node) blocks in getrandom() until the kernel's
+# entropy pool initializes — minutes under TCG unless something blocks on
+# /dev/random, which triggers the kernel's active jitter-entropy loop. Kick it
+# at login so crypto is ready by the time the user runs a network command.
+# (Durable fix = CONFIG_HW_RANDOM_VIRTIO + virtio-rng device; kernel rebuild, parked.)
+RUN echo '(head -c1 /dev/random >/dev/null 2>&1 &)' >> /root/.bashrc
+
 # uv baked in (pip's vendored urllib3 stalls against the in-tab proxy; uv works).
 RUN pip3 install --break-system-packages uv
 

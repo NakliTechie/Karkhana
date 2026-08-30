@@ -36,6 +36,7 @@ alpine-build/*
 !qemu-build/
 qemu-build/*
 !qemu-build/Dockerfile.guest
+!qemu-build/README.md
 !qemu-build/build.sh
 !qemu-build/karkhana.html
 !qemu-build/serve.py
