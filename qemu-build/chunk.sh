@@ -46,6 +46,12 @@ for name in sorted(os.listdir(src)):
     size = os.path.getsize(path)
     if size <= chunk:
         continue
+    # A .gzip sibling means that is the form the page actually fetches; the raw
+    # file is a build intermediate (c2w-net-proxy.wasm is the case today).
+    # Chunking it would add tens of MB of parts nothing ever downloads.
+    if os.path.exists(path + ".gzip"):
+        print(f"    {name}: skipped, {name}.gzip is the shipped form")
+        continue
 
     parts = []
     # aa, ab, ac ... matching `split -d` conventions the old layout used
