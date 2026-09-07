@@ -7,14 +7,75 @@ Debian 12 (x86_64, glibc) booting in a browser tab on QEMU-compiled-to-wasm
 ## Build & run
 
 ```
-./build.sh                 # guest image (Dockerfile.guest) -> c2w -> out/htdocs (~600MB)
-python3 serve.py 8793      # COOP/COEP static server
+./run-build.sh             # build.sh with the Docker credential workaround (see below)
+                           #   guest image (Dockerfile.guest) -> c2w -> out/htdocs (~600MB)
+                           #   then stages a publishable tree into publish/
+python3 serve.py 8793      # COOP/COEP static server over out/htdocs
 # open http://127.0.0.1:8793/karkhana.html
+```
+
+**Always build through `run-build.sh`.** Docker Desktop's credential helper
+(`credsStore: "desktop"` in `~/.docker/config.json`) hangs image resolution
+indefinitely on this machine — no output, no error, 0% CPU, while DNS and the
+registry auth endpoint answer normally. It cost twenty minutes of a build that
+looked like it was running. The wrapper sets `DOCKER_CONFIG=$HOME/.docker-nocreds`,
+a copy of the config with `credsStore` / `credHelpers` / `auths` stripped, so
+pulls go out anonymously. Every image c2w needs is public. Recreate that copy
+with:
+
+```
+cp -R ~/.docker ~/.docker-nocreds   # then delete credsStore/credHelpers/auths from config.json
 ```
 
 Requires Docker, Go (for net/c2w-net), node/npm (for net/stack), and read access
 to a container2wasm checkout (path in build.sh; currently beagle's vendored copy —
 used strictly read-only).
+
+## Publishing
+
+The repo is the only artifact store. Cloudflare Pages serves `next/` straight
+from `main`, and it refuses any file over 25 MB, so the engine ships as 20 MB
+parts plus a manifest that the page reassembles.
+
+```
+./build.sh                 # ends by staging publish/
+./chunk.sh                 # or run the staging step alone
+./publish.sh --dry-run     # replace next/, show the diff, stop
+./publish.sh               # replace next/, commit, push
+```
+
+`chunk.sh` splits anything over the cap, writes `engine/engine-manifest.json`
+(parts in order plus byte size), and then **reassembles the parts in memory and
+compares SHA-256 against the original**. A corrupt engine costs a 640 MB
+force-push to undo, so the check is not optional.
+
+`publish.sh` derives an engine id from the manifest and stamps it into the
+cache name in `karkhana.html` and `karkhana-sw.js`. This is load-bearing: the
+service worker is cache-first for `.wasm` / `.data` / `.gzip`, so without a new
+cache name a returning browser keeps booting the previous engine with no error
+to explain it. The script refuses to publish if the stamp did not apply.
+
+### Force-push discipline
+
+Engine updates **replace** history, they never accumulate — 640 MB of
+superseded parts per release would make the clone unusable within a few
+releases.
+
+- If the branch tip is already an `Engine <id>` commit, `publish.sh` amends it
+  and force-pushes with `--force-with-lease`. Anyone holding the old commit
+  must re-clone or `reset --hard`.
+- If the tip is anything else, it makes a **new** commit and pushes normally,
+  because amending unrelated work would be unrecoverable for anyone who already
+  pulled. The previous engine stays in history behind it; squash it out when
+  the clone starts to hurt. The next publish on top will replace.
+
+### One page, two modes
+
+`karkhana.html` is a single source used by both the local build output and the
+published tree. At boot it probes for `engine/engine-manifest.json`: found means
+assemble from parts and hand emscripten blob URLs, absent means let emscripten
+fetch the `.data` whole. Nothing is rewritten at publish time, so the two modes
+cannot drift apart.
 
 ## What's inside the guest
 
@@ -51,9 +112,15 @@ agent tier → BYOK endpoint (key stays in the browser; SW injects it at
 - **9p WASI-errno mistranslation — FIXED by our carried patch** (upstream:
   issue ktock/qemu-wasm#45, PR ktock/qemu-wasm#46; builder compiles from
   NakliTechie/qemu-wasm `build/9p-fix-8604`). Lookup-miss now returns ENOENT
-  correctly. Follow-up bug surfaced by honest errnos: guest-side file CREATE on
-  virtfs still fails with a genuine EPERM (local-backend create path; both
-  security models) — to be filed upstream. ksave/tar persistence unaffected.
+  correctly.
+- **9p virtfs CREATE returning EPERM — FIXED by our carried patch** (branch
+  `fix/9p-path-chmod` on the fork). Emscripten defines `O_PATH` but openat()
+  ignores it, so `fchmodat_nofollow()` took the Linux path that re-opens the
+  file through `/proc/self/fd/<n>` — and emscripten has no `/proc`. The chmod
+  failed, and `local_open2()`'s error path unlinked the file it had just
+  created, so every create failed after succeeding. The fix treats `O_PATH` as
+  unsupported on emscripten so the existing fallback `fchmod()`s the descriptor
+  directly.
 - **Bun binaries trap** (opencode etc.): need SSE4.2+; wasm TCG's qemu64 is
   SSE2-era; `-cpu max` kernel-panics, `Nehalem` hangs (seam kept in
   Dockerfile.builder). Prebuilt Go/baseline-Rust binaries run fine (uv proves it).

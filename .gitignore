@@ -42,6 +42,9 @@ qemu-build/*
 !qemu-build/Dockerfile.guest
 !qemu-build/README.md
 !qemu-build/build.sh
+!qemu-build/run-build.sh
+!qemu-build/chunk.sh
+!qemu-build/publish.sh
 !qemu-build/karkhana.html
 !qemu-build/serve.py
 !qemu-build/karkhana-sw.js

@@ -43,3 +43,12 @@ gzip -kf "$OUT/c2w-net-proxy.wasm" && mv "$OUT/c2w-net-proxy.wasm.gz" "$OUT/c2w-
 mkdir -p "$OUT/dist"
 cp "$(dirname "$0")/net/stack/dist/stack.js" "$(dirname "$0")/net/stack/dist/stack-worker.js" "$OUT/dist/"
 cp "$(dirname "$0")/karkhana-sw.js" "$OUT/karkhana-sw.js"
+
+echo "==> Staging a publishable tree (chunked engine + manifest)…"
+./chunk.sh "$OUT" publish
+
+echo
+echo "==> Build complete."
+echo "    Local test:  python3 serve.py 8793   ->  http://127.0.0.1:8793/karkhana.html"
+echo "                 (serves out/htdocs directly — no manifest, so the page loads the engine whole)"
+echo "    Publish:     ./publish.sh            ->  replaces next/ and pushes"

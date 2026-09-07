@@ -36,7 +36,7 @@ ARG BOCHS_REPO=https://github.com/ktock/Bochs
 ARG BOCHS_REPO_VERSION=a88d1f687ec83ff82b5318f59dcecb8dab44fc83
 
 ARG QEMU_REPO=https://github.com/NakliTechie/qemu-wasm
-ARG QEMU_REPO_VERSION=9f2acf64bccf2e654fd2d9b0b2bb6dc65d56a0c8
+ARG QEMU_REPO_VERSION=766b8be6e65ed00f95d41b687ff3d64557c5286e
 
 ARG SOURCE_REPO=https://github.com/ktock/container2wasm
 ARG SOURCE_REPO_VERSION=v0.8.4
