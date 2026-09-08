@@ -1,11 +1,23 @@
 # The whole site is the app now, so cross-origin isolation applies at the apex.
-# Note: Pages has not been applying this file (known, unexplained); karkhana-sw.js
-# injects the same three headers, which is what actually makes SharedArrayBuffer
-# work today. Kept correct so the SW is a belt, not the only strap.
+# karkhana-sw.js injects the same three headers as a fallback; both are in force.
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
   Cross-Origin-Resource-Policy: same-origin
 
+# Engine parts are content-addressed by the engine id stamped into the service
+# worker's cache name, so they can be cached forever.
 /engine/*
   Cache-Control: public, max-age=31536000, immutable
+
+# Everything else is small and unversioned. Without this a returning visitor
+# keeps running yesterday's code with nothing to invalidate it: a fix to
+# dist/stack.js shipped and the browser still loaded the 26,287-byte copy from
+# cache while the edge served the 28,319-byte fixed one. `no-cache` means
+# revalidate, not "do not store" — these are ETag 304s in the normal case.
+/dist/*
+  Cache-Control: no-cache
+/vendor/*
+  Cache-Control: no-cache
+/*.js
+  Cache-Control: no-cache
