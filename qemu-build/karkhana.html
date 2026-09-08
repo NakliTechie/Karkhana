@@ -33,6 +33,10 @@
       #cfgbtn:hover { color:var(--kk-ink); border-color:var(--kk-ink-mute); }
       #vmstate { margin-left:0; }
       #cfgpanel { background:var(--kk-panel); border-bottom:1px solid var(--kk-line); padding:10px 14px; display:flex; flex-direction:column; gap:8px; font-size:12px; }
+      /* the panel carries the `hidden` attribute and the gear toggles it, but an ID
+         rule setting display beats the UA stylesheet's [hidden]{display:none}, so the
+         attribute was inert and the panel sat open above the terminal on every load. */
+      #cfgpanel[hidden] { display:none; }
       #cfgpanel .row { display:flex; align-items:center; gap:10px; }
       #cfgpanel label { width:64px; color:var(--kk-ink-soft); }
       #cfgpanel input { flex:1; max-width:480px; background:var(--kk-row); border:1px solid var(--kk-line); color:var(--kk-ink); padding:4px 8px; border-radius:3px; font:inherit; }
