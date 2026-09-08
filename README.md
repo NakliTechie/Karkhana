@@ -9,8 +9,10 @@ A real Linux VM in your browser tab. Shell, filesystem, coding agent — no serv
 > package installs and an in-guest agent. First load pulls a ~600 MB engine and
 > then caches it; subsequent boots are seconds.
 >
-> The original 32-bit v86 build (Alpine, i686, musl) is archived on branch
-> `legacy/v86`, tag `v86-final`, and still served from the old GitHub Pages URL.
+> The original 32-bit v86 build (Alpine, i686, musl) is archived **as source**
+> on branch `legacy/v86`, tag `v86-final`. It is no longer served anywhere:
+> GitHub Pages builds this repo from `main`, so that URL now serves the 64-bit
+> build as well. To bring the old one back online, point Pages at `legacy/v86`.
 > **Everything below this line still describes that v86 build** — the 9P↔FSA
 > workspace, the MCP server and the JS `fs` API are v86 features that the
 > qemu-wasm engine does not have yet. The qemu-wasm architecture, build recipe
