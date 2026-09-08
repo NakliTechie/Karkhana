@@ -1,143 +1,149 @@
 # Karkhana / कारख़ाना
 
-A real Linux VM in your browser tab. Shell, filesystem, coding agent — no server, no install, nothing leaves your device.
+A real Linux VM in your browser tab. Shell, package manager, coding agent — no server, no install, nothing leaves your device.
 
 **[Launch Karkhana](https://karkhana.naklitechie.com/)**
 
-> **The apex now serves the 64-bit qemu-wasm build** — Debian 12 bookworm,
-> x86_64, glibc 2.36, Python 3.11 and Node 18, with real networking, `uv`/`kpip`
-> package installs and an in-guest agent. First load pulls a ~600 MB engine and
-> then caches it; subsequent boots are seconds.
->
-> The original 32-bit v86 build (Alpine, i686, musl) is archived **as source**
-> on branch `legacy/v86`, tag `v86-final`. It is no longer served anywhere:
-> GitHub Pages builds this repo from `main`, so that URL now serves the 64-bit
-> build as well. To bring the old one back online, point Pages at `legacy/v86`.
-> **Everything below this line still describes that v86 build** — the 9P↔FSA
-> workspace, the MCP server and the JS `fs` API are v86 features that the
-> qemu-wasm engine does not have yet. The qemu-wasm architecture, build recipe
-> and ops notes live in `qemu-build/README.md`.
-
----
+The name means "workshop" in Hindi/Urdu.
 
 ## What this is
 
-Karkhana boots a real Linux 6.8 kernel (i686) in your browser using [v86](https://github.com/copy/v86) x86 emulation. You get a full shell, a persistent filesystem backed by a folder on your machine, an LLM-powered coding agent, and an MCP server — all in a single browser tab with zero backend.
+Karkhana boots **Debian 12 bookworm, x86_64, glibc 2.36** in a browser tab. Not a shim, not a Node sandbox — a full kernel (Linux 6.1) with real syscalls, real processes, and a real package manager, running on QEMU compiled to WebAssembly.
 
-The name means "workshop" in Hindi/Urdu.
+That means `apt`-era userland expectations hold: Python 3.11 and Node 18 are there, `uv pip install` and `npm install -g` fetch from the real registries, and a coding agent runs *inside* the VM with a real filesystem to work on.
 
-## What it does
+The first visit downloads a ~640 MB engine and takes a minute or two, most of it transfer. The engine is then cached in the browser, and later visits start from that copy.
 
-| Feature | How it works |
+## What's inside the guest
+
+| | |
 |---|---|
-| **Real Linux shell** | v86 emulates an x86 CPU, boots a Buildroot 6.8 kernel, serial console wired to xterm.js |
-| **Persistent /workspace** | 9P filesystem bridges VM ↔ host via File System Access API. Pick a folder, files sync bidirectionally |
-| **LLM bridge** | Agent inside VM writes HTTP requests to a file; browser polls, fires `fetch()` to LLM APIs, writes response back. Keys injected by bridge, never visible inside VM |
-| **Multi-provider** | Anthropic, OpenRouter, OpenAI, LM Studio, Ollama — all via endpoint presets. Model discovery with CORS detection |
-| **In-browser AI** | WebGPU models via Transformers.js (Qwen 0.5B–1.5B, SmolLM 1.7B). No API key needed |
-| **MCP server** | Service Worker exposes `run_command`, `read_file`, `write_file` tools. External agents (Claude Code, Cursor) connect via config block |
-| **JS API** | `window.karkhana` with `fs.read/write/list`, `shell.run`, `config.setProvider`, `snapshot/restore` |
-| **Embed mode** | Load in iframe, postMessage bridge mirrors the full JS API |
-| **File browser** | Sidebar tree view of /workspace with right-click context menus (preview, download, delete) |
+| **Base** | Debian 12 bookworm, x86_64, glibc 2.36, Linux 6.1, 4 vCPUs (MTTCG), 1024 MB RAM |
+| **Languages** | Python 3.11.2, Node 18.20.4, sqlite3, git, curl |
+| **Python packages** | `kpip <pkg>` — `uv` tuned for the in-page network path. Plain `pip` stalls against the proxy; `uv` does not |
+| **Node packages** | `npm install -g` works against the real registry |
+| **Persistence** | `ksave` tars `/usr/local` + `/root` to `/persist/state.tar`; the page mirrors it to OPFS within a few seconds and restores it at the next login |
+| **Agent** | `/usr/bin/agent "task"` — an OpenAI-protocol tool loop with `run_command` / `read_file` / `write_file` / `list_directory` |
+
+## Networking
+
+The guest gets a real NIC, not a shimmed `fetch`. Two modes, auto-selected at boot:
+
+- **In-page fetch stack (zero-install, what the hosted site uses).** [gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock) compiled to wasm, with egress through the browser's own `fetch()`. Bounded by CORS, so PyPI and npm work; `apt`, `git` and GitHub releases do not.
+- **Relay (development).** Run `net/c2w-net -listen-ws localhost:8888` on your machine and the page picks it up, giving the guest real TCP/IP — plain `pip`, `git`, `apt`, anything.
+
+## AI, and how the key stays out of the VM
+
+Two tiers, both optional — pull them out and the Linux box is unchanged.
+
+- **General-purpose:** on-device Gemini Nano where the browser offers it, with no key and no network call.
+- **Agent:** bring your own endpoint and key in the ⚙ panel.
+
+The key never enters the VM. The guest talks to `api.karkhana.internal`; that request surfaces in the service worker, which rewrites it to your configured endpoint and injects the `Authorization` header from IndexedDB. Nothing inside the guest can read it — an in-guest `env | grep -ci secret` returns 0 while the bridge is working.
+
+## JS API
+
+`window.karkhana` is the same seam the page's own UI uses:
+
+```js
+karkhana.shell.exec('uname -a')        // run a command
+karkhana.shell.send('partial input')   // write without a newline
+karkhana.shell.onData(cb)              // subscribe to guest output
+karkhana.persist.pull()                // mirror saved state to OPFS now
+karkhana.persist.forget()              // drop saved state
+karkhana.net                           // { mode, cert } — which network path is live
+karkhana.ai.gp.ask(prompt)             // on-device tier
+```
+
+Read output through `onData`. The terminal renders to canvas, so the DOM has nothing to scrape.
+
+## Not here yet
+
+The 32-bit build had several things this one does not. Named plainly rather than left to discovery:
+
+- **No host-folder workspace.** The v86 build bridged a real folder in via the File System Access API. The qemu-wasm guest has `/persist` (OPFS-backed) and no host folder.
+- **No MCP server**, so external agents cannot connect to the VM yet.
+- **No file browser, toasts, or help modal.** The v86 sidebar read the guest filesystem directly; here the filesystem is only reachable through `shell.exec`, so the tree needs building rather than porting.
+- **No `fs` JS API** — `shell.exec` is the way in.
+- **Bun-based tools** (opencode and friends) trap: they need SSE4.2, and wasm TCG's `qemu64` is SSE2-era. Prebuilt Go and baseline-Rust binaries run fine.
 
 ## How it's different
 
-### vs. Puter
+**vs. [WebContainers](https://webcontainers.io)** — WebContainers run Node in the browser. Karkhana runs Linux: real syscalls, real processes, real `crontab`, any language. The trade is speed — emulation, not native.
 
-[Puter](https://github.com/HeyPuter/puter) is a cloud desktop OS — it runs a full Node.js backend, manages user accounts, provides cloud storage, and presents a desktop metaphor with windows and apps. Karkhana is the opposite: **zero backend, single HTML file, everything local**. Where Puter gives you a cloud OS, Karkhana gives you a local Linux workshop. The key architectural difference is the agent model: Puter's AI features are backend API calls; Karkhana's agent runs *inside* the emulated Linux VM with real `fork()`, real filesystem, real shell — because that's what a coding agent actually needs.
+**vs. [Puter](https://github.com/HeyPuter/puter)** — Puter is a cloud desktop with a Node backend, accounts and cloud storage. Karkhana has no backend at all. The sharpest difference is the agent: Puter's AI is a backend API call, Karkhana's agent runs inside the VM with a filesystem to act on.
 
-### vs. copy.sh/v86
+**vs. [copy.sh/v86](https://copy.sh/v86/)** — where Karkhana started, and still a fine 32-bit emulator. The move to qemu-wasm was about the userland ceiling: i686 musl Alpine could not run a modern Python or Node toolchain. Debian x86_64 can.
 
-[v86](https://github.com/copy/v86) is the x86 emulator Karkhana is built on. The copy.sh demo lets you boot various OSes in the browser — it's a showcase. Karkhana wraps v86 into a product: persistent workspace, LLM bridge, agent harness, MCP server, and a UI designed for coding workflows rather than OS exploration.
+## Built on
 
-### vs. StackBlitz/WebContainers
+| Component | What it does |
+|---|---|
+| [ktock/qemu-wasm](https://github.com/ktock/qemu-wasm) | QEMU compiled to WebAssembly — the emulator itself |
+| [container2wasm](https://github.com/ktock/container2wasm) | Turns a container image into a bootable browser bundle |
+| [xterm.js](https://xtermjs.org) + xterm-pty | Terminal, wired to the guest's serial console |
+| [gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock) | The user-mode network stack behind the in-page proxy |
 
-WebContainers run Node.js in the browser via WebAssembly. Karkhana runs *real Linux* — a full kernel with real syscalls, real processes, real `crontab`. The trade-off is speed (v86 emulation is ~30 MIPS vs native), but you get an environment where any Linux tool can run, not just Node.
+Karkhana runs a **fork of qemu-wasm** carrying three fixes, because upstream has been dormant since September 2025:
 
-## What we borrowed and extended
-
-| Component | Source | What we extended |
-|---|---|---|
-| **[v86](https://github.com/copy/v86)** | x86 emulator + copy.sh demo build | Patched to expose emulator instance. Replaced demo UI with Karkhana shell (landing page, boot overlay, settings panel). Added 9P↔FSA filesystem bridge, networking bridge, MCP server — none of which exist in the v86 demo. |
-| **[xterm.js](https://xtermjs.org)** | Terminal rendering | Themed to match Karkhana dark scheme. Scrollbar styled. Wired to v86 serial console (v86 demo uses its own xterm instance; we hide it and relay output). |
-| **[Transformers.js](https://huggingface.co/docs/transformers.js)** v4 | In-browser ML inference | WebGPU worker pattern adapted from [VaultMind](https://github.com/NakliTechie/VaultMind) (another NakliTechie project). Added bridge routing so in-browser models serve agent requests without an API key. |
-| **Buildroot bzImage** | Stock image from `i.copy.sh` | No modifications to the image itself. Agent harness, workspace symlink, and provider config injected at boot time via 9P + serial commands. |
-| **v86 network relay** | `wss://relay.widgetry.org/` (by [nickvdp](https://github.com/nickvdp)) | Used for optional TCP/IP networking inside the VM (package installation, curl). Karkhana adds a toggle in settings. |
-
-### What we studied but took a different direction from
-
-- **[Puter](https://github.com/HeyPuter/puter)** — studied their window management, context menus, notification system, and AI SDK patterns. Adopted context menus and toast notifications for the file browser. Did not adopt: desktop metaphor, cloud backend, user accounts, app windowing system. The core difference is Puter is a cloud OS; Karkhana is a local Linux workshop.
-
-## Architecture
-
-```
-Browser tab
-  ├─ v86 emulator (x86 Linux 6.8 kernel)
-  ├─ xterm.js (serial console ↔ VM shell)
-  ├─ 9P filesystem (VM /workspace ↔ host files)
-  │     └─ FSA (real folder) or OPFS (browser sandbox)
-  ├─ Networking bridge (VM → browser fetch → LLM APIs)
-  │     └─ Anthropic / OpenAI / Ollama / In-browser
-  ├─ Agent harness (/usr/bin/agent)
-  ├─ MCP Service Worker (external agents connect here)
-  └─ window.karkhana JS API + postMessage embed bridge
-```
+- **9p errno mistranslation** — WASI error numbers were passed to the guest as if they were Linux ones, so a missing file reported "Channel number out of range". Filed as [ktock/qemu-wasm#45](https://github.com/ktock/qemu-wasm/issues/45), fixed in [#46](https://github.com/ktock/qemu-wasm/pull/46).
+- **9p file creation failing with EPERM.** Emscripten defines `O_PATH` but `openat()` ignores it, so the chmod path re-opened the file through `/proc/self/fd/<n>` — and emscripten has no `/proc`. The failure then unlinked the file it had just created, so every create failed *after* succeeding.
+- **Entropy starvation** — a carried kernel config plus `virtio-rng-pci` brings `crng init` down from 90–560 seconds to about 2.4, which is what made TLS usable in the guest.
 
 ## Quick start
 
-1. Open [naklitechie.github.io/Karkhana](https://naklitechie.github.io/Karkhana/) (or serve locally: `python3 -m http.server 8766`)
-2. Click **Launch Karkhana** — Linux boots in ~15 seconds
-3. Type shell commands at the `~%` prompt
-4. Click **Open Workspace** to connect a host folder
-5. Open **Settings** to configure your LLM provider
+1. Open **[karkhana.naklitechie.com](https://karkhana.naklitechie.com/)** and wait for the engine to download.
+2. Type at the `karkhana:~$` prompt.
+3. `kpip <pkg>` for Python, `npm install -g <pkg>` for Node.
+4. `ksave` to keep what you installed; it comes back on the next visit.
+5. ⚙ to point the agent at an endpoint, then `agent "what does this script do?"`.
 
 ## Local development
 
+The page and its glue are static — no build step, no npm install:
+
 ```bash
 git clone https://github.com/NakliTechie/Karkhana.git
-cd Karkhana
-python3 -m http.server 8766
-# Open http://localhost:8766
+cd Karkhana/qemu-build && python3 serve.py 8793
 ```
 
-No build step. No npm install. No dependencies to install.
+That serves a local engine build out of `qemu-build/out/htdocs`. To serve the published tree instead, any COOP/COEP-setting static server over the repo root works; plain `python3 -m http.server` does not, because SharedArrayBuffer needs cross-origin isolation.
 
-## Keyboard shortcuts
+Rebuilding the engine itself (Docker, Go, node) is documented in **[`qemu-build/README.md`](qemu-build/README.md)**, along with the publish pipeline and its force-push discipline.
 
-| Key | Action |
-|---|---|
-| `Ctrl+B` | Toggle file browser sidebar |
-| `Ctrl+,` | Toggle settings panel |
-| `F1` | Open help |
-| `Escape` | Close panels/menus |
+**If a local page stalls before the engine downloads:** the service worker is cache-first on `.wasm` / `.data`, and only a publish stamps a new cache name, so a local rebuild does not invalidate it. Clear it with:
+
+```js
+navigator.serviceWorker.controller.postMessage('karkhana-clear-cache')
+```
 
 ## Project structure
 
 ```
 Karkhana/
-  index.html          # The entire app — markup, styles, logic
-  v86.css              # v86 demo stylesheet
-  mcp-sw.js            # MCP Service Worker
-  build/
-    v86_patched.js     # copy.sh v86 build (patched to expose emulator)
-    v86.wasm           # Matching WASM (1.4 MB)
-    xterm.js           # xterm.js for serial console
-  bios/
-    seabios.bin        # SeaBIOS firmware
-    vgabios.bin        # VGA BIOS firmware
-  images/
-    buildroot-bzimage68.bin  # Buildroot Linux 6.8 (10 MB)
+  index.html              # the app — boot overlay, terminal, settings, agent seam
+  karkhana-sw.js          # engine cache, COI headers, BYOK bridge
+  load.js  out.js  arg-module.js    # emscripten glue from the qemu-wasm build
+  c2w-net-proxy.wasm.gzip # in-page network proxy
+  dist/                   # network stack worker
+  vendor/                 # xterm.js, xterm-pty
+  engine/                 # the engine: 30 .data parts + 2 .wasm parts + manifest
+  qemu-build/             # how the engine is built, chunked and published
 ```
+
+The engine ships as 20 MB parts because Cloudflare Pages refuses files over 25 MB; the page reassembles them in memory at boot. The repo is the only artifact store — there is no bucket to lose.
+
+## The v86 archive
+
+The original 32-bit build (v86, Alpine 3.18, i686, musl) is preserved on branch **`legacy/v86`**, tag **`v86-final`**, and still runs at **[naklitechie.github.io/Karkhana](https://naklitechie.github.io/Karkhana/)**. It has the host-folder workspace, the MCP server, the file browser and the `fs` JS API — the features listed above as missing here. If you want those today, that is where they live.
 
 ## Palette
 
-Coloured with **`westafrica-10 · ÒRUN`** — the Yoruba night sky, kente-gold ink, electric-indigo directories. The "most vivid dark" in the Rangrez library, fitting for a hacker workshop where every directory is a constellation.
-
-Palette pulled from [**Rangrez**](https://github.com/NakliTechie/rangrez), the global colour-palette library that backs all NakliTechie projects.
+Coloured with **`westafrica-10 · ÒRUN`** — Yoruba night sky, kente-gold ink, electric-indigo directories. The most vivid dark in the [Rangrez](https://github.com/NakliTechie/rangrez) library, which backs all NakliTechie projects.
 
 ## Part of a series
 
-Karkhana is part of the [NakliTechie](https://naklitechie.github.io/) collection of browser-native tools. No server, no API keys, no data leaving your device.
+Karkhana is part of the [NakliTechie](https://naklitechie.github.io/) collection of browser-native tools. No server, no accounts, no data leaving your device.
 
 ## License
 
