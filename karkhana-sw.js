@@ -104,6 +104,15 @@ self.addEventListener('fetch', (e) => {
       return withCoi(resp);
     })());
   } else {
-    e.respondWith(fetch(e.request).then(withCoi));
+    // Everything that is not the engine is small and unversioned, and Cloudflare
+    // Pages serves it with max-age=14400 that a _headers rule cannot override —
+    // so a returning visitor ran a stale dist/stack.js for up to four hours with
+    // nothing to invalidate it. Revalidating here is the invalidation: 'no-cache'
+    // forces a conditional request, which is a 304 whenever nothing changed.
+    e.respondWith(
+      fetch(e.request, { cache: 'no-cache' })
+        .catch(() => fetch(e.request))   // some request modes reject the option
+        .then(withCoi)
+    );
   }
 });
