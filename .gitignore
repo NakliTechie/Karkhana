@@ -1,45 +1,41 @@
+# Whitelist-style: nothing is tracked unless it is named here. The build output
+# is hundreds of megabytes, so an allow-list is the only safe default.
 *
 !.gitattributes
-!index.html
-!v86.css
-!mcp-sw.js
+!.gitignore
 !README.md
 !ROADMAP.md
 !NEXT-SESSION.md
 !CONTRIBUTING.md
 !LICENSE
-!.gitignore
-!build/
-build/*
-!build/v86_patched.js
-!build/v86.wasm
-!build/xterm.js
-!bios/
-bios/*
-!bios/seabios.bin
-!bios/vgabios.bin
-!images/
-images/*
-!images/buildroot-bzimage68.bin
-!images/alpine-vmlinuz
-!images/alpine-initramfs
-!images/alpine-fs.json
-!images/alpine-rootfs-flat/
-images/alpine-rootfs-flat/*
-!images/alpine-rootfs-flat/*.bin.zst
-!alpine-build/
-alpine-build/*
-!alpine-build/Dockerfile
-!alpine-build/build.sh
-
-# qemu-wasm engine (chunked for the 25MB Pages cap; assembled in-page)
 !_headers
-!next/
-!next/**
-# qemu-wasm build (recipe tracked; 494MB+ output bundles rebuilt via qemu-build/build.sh)
+
+# The shipped 64-bit engine, served at the apex. The engine is chunked into
+# <20MB parts because Cloudflare Pages caps a single file at 25MB; the page
+# reassembles them in memory. The repo is the only artifact store.
+!index.html
+!karkhana-sw.js
+!load.js
+!out.js
+!arg-module.js
+!c2w-net-proxy.wasm.gzip
+!engine/
+!engine/**
+!dist/
+dist/*
+!dist/stack.js
+!dist/stack-worker.js
+!vendor/
+vendor/*
+!vendor/xterm.js
+!vendor/xterm.css
+!vendor/xterm-pty.js
+
+# qemu-wasm build (recipe tracked; 600MB+ output bundles rebuilt via qemu-build/build.sh)
 !qemu-build/
 qemu-build/*
 !qemu-build/Dockerfile.guest
+!qemu-build/Dockerfile.builder
 !qemu-build/README.md
 !qemu-build/build.sh
 !qemu-build/run-build.sh
@@ -72,4 +68,3 @@ qemu-build/net/stack/*
 !qemu-build/net/stack/package.json
 !qemu-build/net/stack/webpack.config.js
 !qemu-build/net/stack/tsconfig.json
-!qemu-build/Dockerfile.builder

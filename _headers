@@ -1,7 +1,11 @@
-/next/*
+# The whole site is the app now, so cross-origin isolation applies at the apex.
+# Note: Pages has not been applying this file (known, unexplained); karkhana-sw.js
+# injects the same three headers, which is what actually makes SharedArrayBuffer
+# work today. Kept correct so the SW is a belt, not the only strap.
+/*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
   Cross-Origin-Resource-Policy: same-origin
 
-/next/engine/*
+/engine/*
   Cache-Control: public, max-age=31536000, immutable
