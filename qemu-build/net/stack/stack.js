@@ -49,6 +49,44 @@ function emscriptenMockWebSocket(address, onconnection) {
     window.WebSocket = EmscriptenMockWebSocket;
 }
 
+// CORS keeps the guest's HTTP requests honest: a request carrying any header
+// outside the safelist stops being a "simple" request, so the browser sends a
+// preflight OPTIONS first. registry.npmjs.org answers OPTIONS with 404 and no
+// CORS headers, so the preflight fails and the real request never leaves.
+// npm sends npm-command / npm-session / pacote-version (and authorization when
+// configured), which is why `npm install` of a scoped package died here while
+// the same URL fetched fine with no headers. Measured from the page origin:
+// {} -> 200, {Accept} -> 200, {npm-command} -> failed, {pacote-version} ->
+// failed, {authorization} -> failed.
+// Dropping those headers costs nothing the public registries need.
+const CORS_SAFELISTED_HEADERS = new Set([
+    "accept", "accept-language", "content-language", "range",
+]);
+const CORS_SIMPLE_CONTENT_TYPES = new Set([
+    "application/x-www-form-urlencoded", "multipart/form-data", "text/plain",
+]);
+
+// The BYOK bridge host never reaches the network — the service worker answers
+// it and injects the key — so it cannot preflight, and it needs the guest's
+// headers intact. Left exactly as it was.
+const BRIDGE_HOST = "api.karkhana.internal";
+
+function keepRequestCorsSimple(headers, address) {
+    if (!headers) return headers;
+    if (address && address.indexOf(BRIDGE_HOST) !== -1) return headers;
+    const out = {};
+    for (const key of Object.keys(headers)) {
+        const name = key.toLowerCase();
+        if (CORS_SAFELISTED_HEADERS.has(name)) {
+            out[key] = headers[key];
+        } else if (name === "content-type") {
+            const value = String(headers[key]).split(";")[0].trim().toLowerCase();
+            if (CORS_SIMPLE_CONTENT_TYPES.has(value)) out[key] = headers[key];
+        }
+    }
+    return out;
+}
+
 export function Start(address, stackWorkerFile, stackImage, readyCallback) {
     emscriptenMockWebSocket(address, (client) => {
         if (curSocket != null) {
@@ -422,6 +460,8 @@ function connect(name, shared, toNet, certbuf) {
                     if (reqObj.headers && reqObj.headers["User-Agent"] != "") {
                         delete reqObj.headers["User-Agent"]; // Browser will add its own value.
                     }
+                    var reqAddress = new TextDecoder().decode(req_.address);
+                    reqObj.headers = keepRequestCorsSimple(reqObj.headers, reqAddress);
                     var reqID = getID();
                     if (reqID < 0) {
                         console.log(name + ":" + "failed to get id");
