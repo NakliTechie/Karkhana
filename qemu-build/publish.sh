@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish a staged engine to the repo's next/ tree and push it.
+# Publish a staged engine to the repo root — what karkhana.naklitechie.com serves — and push it.
 #
 # The repo is the only artifact store, so an engine update REPLACES history
 # rather than accumulating: 640 MB of superseded parts in the log would make
@@ -12,7 +12,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-DEST="$REPO_ROOT/next"
+DEST="$REPO_ROOT"
+
+# The paths an engine publish owns at the apex. Named explicitly because DEST is
+# the repo root: a blanket rm -rf here would take the whole working tree with it.
+OWNED=(engine dist vendor index.html karkhana-sw.js load.js out.js
+       arg-module.js c2w-net-proxy.wasm.gzip)
 DRY=false
 STAGE="publish"
 
@@ -50,19 +55,20 @@ if ! grep -q "karkhana-engine-$CACHE_VER" "$STAGE/karkhana.html"; then
     exit 1
 fi
 
-echo "==> replacing $DEST"
-rm -rf "$DEST"
-mkdir -p "$DEST"
+echo "==> replacing the published tree at $DEST"
+for path in "${OWNED[@]}"; do rm -rf "${DEST:?}/$path"; done
 cp -R "$STAGE"/. "$DEST"/
+# the staged page is karkhana.html; at the apex it is the index
+mv "$DEST/karkhana.html" "$DEST/index.html"
 
 cd "$REPO_ROOT"
-git add -A next
+git add -A
 echo
-git diff --cached --stat -- next | tail -5
+git diff --cached --stat | tail -5
 echo
 
 if $DRY; then
-    echo "==> dry run. next/ is staged in the index; nothing committed or pushed."
+    echo "==> dry run. the published tree is staged in the index; nothing committed or pushed."
     exit 0
 fi
 
@@ -83,7 +89,7 @@ if [[ "$HEAD_SUBJECT" == Engine\ * ]]; then
 
 WARN
     read -r -p "Type REPLACE to continue: " CONFIRM
-    [ "$CONFIRM" = "REPLACE" ] || { echo "aborted — next/ is staged but not committed"; exit 1; }
+    [ "$CONFIRM" = "REPLACE" ] || { echo "aborted — the published tree is staged but not committed"; exit 1; }
 else
     MODE=new
     cat <<WARN
@@ -97,7 +103,7 @@ else
 
 WARN
     read -r -p "Type PUBLISH to continue: " CONFIRM
-    [ "$CONFIRM" = "PUBLISH" ] || { echo "aborted — next/ is staged but not committed"; exit 1; }
+    [ "$CONFIRM" = "PUBLISH" ] || { echo "aborted — the published tree is staged but not committed"; exit 1; }
 fi
 
 if [ "$MODE" = replace ]; then

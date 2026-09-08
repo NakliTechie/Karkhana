@@ -2,7 +2,19 @@
 
 A real Linux VM in your browser tab. Shell, filesystem, coding agent — no server, no install, nothing leaves your device.
 
-**[Launch Karkhana](https://naklitechie.github.io/Karkhana/)** | **[Documentation](https://naklitechie.github.io/Karkhana/)** (click ? in-app)
+**[Launch Karkhana](https://karkhana.naklitechie.com/)**
+
+> **The apex now serves the 64-bit qemu-wasm build** — Debian 12 bookworm,
+> x86_64, glibc 2.36, Python 3.11 and Node 18, with real networking, `uv`/`kpip`
+> package installs and an in-guest agent. First load pulls a ~600 MB engine and
+> then caches it; subsequent boots are seconds.
+>
+> The original 32-bit v86 build (Alpine, i686, musl) is archived on branch
+> `legacy/v86`, tag `v86-final`, and still served from the old GitHub Pages URL.
+> **Everything below this line still describes that v86 build** — the 9P↔FSA
+> workspace, the MCP server and the JS `fs` API are v86 features that the
+> qemu-wasm engine does not have yet. The qemu-wasm architecture, build recipe
+> and ops notes live in `qemu-build/README.md`.
 
 ---
 
