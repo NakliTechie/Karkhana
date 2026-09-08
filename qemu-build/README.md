@@ -1,8 +1,9 @@
 # Karkhana qemu-wasm engine
 
 Debian 12 (x86_64, glibc) booting in a browser tab on QEMU-compiled-to-wasm
-(ktock/qemu-wasm via container2wasm). Replaces the v86 32-bit engine
-(preserved on branch `legacy/v86`).
+(ktock/qemu-wasm via container2wasm). This is what karkhana.naklitechie.com
+serves. It replaced the v86 32-bit engine, which is preserved on branch
+`legacy/v86` and still served from naklitechie.github.io/Karkhana.
 
 ## Build & run
 
@@ -33,16 +34,21 @@ used strictly read-only).
 
 ## Publishing
 
-The repo is the only artifact store. Cloudflare Pages serves `next/` straight
-from `main`, and it refuses any file over 25 MB, so the engine ships as 20 MB
-parts plus a manifest that the page reassembles.
+The repo is the only artifact store. Cloudflare Pages serves the **repo root**
+straight from `main`, and it refuses any file over 25 MB, so the engine ships as
+20 MB parts plus a manifest that the page reassembles.
 
 ```
 ./build.sh                 # ends by staging publish/
 ./chunk.sh                 # or run the staging step alone
-./publish.sh --dry-run     # replace next/, show the diff, stop
-./publish.sh               # replace next/, commit, push
+./publish.sh --dry-run     # replace the published tree, show the diff, stop
+./publish.sh               # replace the published tree, commit, push
 ```
+
+`publish.sh` writes to the repo root, so the paths a publish owns (`engine/`,
+`dist/`, `vendor/`, the page and its glue) are named explicitly in an `OWNED`
+list rather than cleared with a blanket `rm -rf` — the destination is the
+working tree. The staged `karkhana.html` becomes `index.html` at the root.
 
 `chunk.sh` splits anything over the cap, writes `engine/engine-manifest.json`
 (parts in order plus byte size), and then **reassembles the parts in memory and
@@ -72,10 +78,11 @@ releases.
 ### One page, two modes
 
 `karkhana.html` is a single source used by both the local build output and the
-published tree. At boot it probes for `engine/engine-manifest.json`: found means
-assemble from parts and hand emscripten blob URLs, absent means let emscripten
-fetch the `.data` whole. Nothing is rewritten at publish time, so the two modes
-cannot drift apart.
+published tree (where it is renamed `index.html`). At boot it probes for
+`engine/engine-manifest.json`: found means assemble from parts and hand
+emscripten blob URLs, absent means let emscripten fetch the `.data` whole. Only
+the cache-name stamp is rewritten at publish time, so the two modes cannot
+drift apart.
 
 ## What's inside the guest
 
