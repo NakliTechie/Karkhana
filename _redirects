@@ -1,0 +1,10 @@
+# The app moved from /next/karkhana.html to the apex on 2026-09-08.
+# Links to the old path were shared, and Cloudflare Pages answers every
+# unmatched path with index.html at HTTP 200 — so /next/karkhana served the
+# app's HTML while its relative assets (vendor/xterm.js, dist/stack.js, ...)
+# resolved under /next/ and came back as that same HTML. The browser then
+# executed HTML as JavaScript: the page rendered and the terminal never booted.
+# Redirect the old path instead of letting it masquerade as a working app.
+/next/karkhana      /   301
+/next/karkhana.html /   301
+/next/*             /   301

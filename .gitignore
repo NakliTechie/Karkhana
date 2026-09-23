@@ -9,6 +9,8 @@
 !CONTRIBUTING.md
 !LICENSE
 !_headers
+!_redirects
+!404.html
 
 # The shipped 64-bit engine, served at the apex. The engine is chunked into
 # <20MB parts because Cloudflare Pages caps a single file at 25MB; the page
