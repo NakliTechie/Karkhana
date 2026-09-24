@@ -1,6 +1,9 @@
 # Karkhana guest userland — modern 64-bit glibc Debian for qemu-wasm.
 # Replaces the v86 32-bit musl Alpine. This image is the container workload
 # c2w runs inside the qemu-wasm micro-VM; its rootfs becomes the browser guest.
+# Node 22: claude-code requires >=22; Debian 12 ships 18.
+FROM node:22-bookworm-slim AS node
+
 FROM debian:12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -10,13 +13,23 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash coreutils ca-certificates \
       python3 python3-pip python3-venv \
-      nodejs npm \
       sqlite3 curl git less nano procps iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN printf '\nKarkhana / \340\244\225\340\244\276\340\244\260\340\244\226\340\274\200\340\244\250\340\244\276 \342\200\224 Debian 12 (glibc) on qemu-wasm\nType "agent" (python) or run a node TUI.\n' > /etc/motd \
     && echo 'root:x:0:0:root:/root:/bin/bash' > /etc/passwd \
     && echo 'PS1="karkhana:\w\$ "' >> /root/.bashrc
+
+# Node lives in /opt/node, not /usr/local: ksave tars /usr/local, and the
+# runtime must not ride in every save. Global npm installs still land in
+# /usr/local (prefix below), so installed agents persist as before.
+COPY --from=node /usr/local/bin/node /opt/node/bin/node
+COPY --from=node /usr/local/lib/node_modules/npm /opt/node/lib/node_modules/npm
+RUN ln -s /opt/node/bin/node /usr/bin/node \
+    && ln -s /opt/node/lib/node_modules/npm/bin/npm-cli.js /usr/bin/npm \
+    && ln -s /opt/node/lib/node_modules/npm/bin/npx-cli.js /usr/bin/npx \
+    && npm config set prefix /usr/local --location=global \
+    && node -v && npm -v
 
 # The coding agent: OpenAI protocol to the browser-side bridge; keys stay outside the VM.
 COPY guest/agent.py /usr/bin/agent

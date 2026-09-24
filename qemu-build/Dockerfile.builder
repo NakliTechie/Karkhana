@@ -36,7 +36,7 @@ ARG BOCHS_REPO=https://github.com/ktock/Bochs
 ARG BOCHS_REPO_VERSION=a88d1f687ec83ff82b5318f59dcecb8dab44fc83
 
 ARG QEMU_REPO=https://github.com/NakliTechie/qemu-wasm
-ARG QEMU_REPO_VERSION=766b8be6e65ed00f95d41b687ff3d64557c5286e
+ARG QEMU_REPO_VERSION=7df55d6d2b65d7a38bfd91f0d92c9dbe1a176328
 
 ARG SOURCE_REPO=https://github.com/ktock/container2wasm
 ARG SOURCE_REPO_VERSION=v0.8.4
@@ -388,6 +388,14 @@ RUN mkdir -p /libffi
 RUN git clone https://github.com/libffi/libffi /libffi
 WORKDIR /libffi
 RUN git checkout $FFI_VERSION
+# Karkhana carried patch: the wasm32 DEREF macros index the heap with a signed
+# shift (addr >> 2). Pointers above 2 GiB go negative, the read returns
+# undefined, and ffi_call_js dies with "Cannot convert undefined to a BigInt"
+# (or silently passes 0 for 32-bit args). A 3000 MB heap puts helper arguments
+# there once guest RAM is above ~1 GiB. Upstream master still has it.
+RUN sed -i -E 's/HEAP(U?)(8|16|32|64|F32|F64)\[\(addr >> ([123])\)/HEAP\1\2[((addr) >>> \3)/' src/wasm32/ffi.c \
+    && ! grep -nE 'define DEREF.*addr >> [123]' src/wasm32/ffi.c \
+    && grep -c 'addr) >>> ' src/wasm32/ffi.c
 RUN autoreconf -fiv
 RUN emconfigure ./configure --host=$CHOST --prefix=$TARGET --enable-static --disable-shared --disable-dependency-tracking \
     --disable-builddir --disable-multi-os-directory --disable-raw-api --disable-structs --disable-docs || cat config.log
@@ -578,7 +586,7 @@ RUN git clone https://github.com/hoytech/vmtouch.git && \
     mkdir /out && mv vmtouch /out/
 
 FROM ubuntu:22.04 AS rootfs-amd64-dev
-RUN apt-get update -y && apt-get install -y mkisofs
+RUN apt-get update -y && apt-get install -y squashfs-tools
 COPY --link --from=busybox-amd64-dev /out/ /rootfs/
 COPY --link --from=runc-amd64-dev /out/runc /rootfs/sbin/runc
 COPY --link --from=bundle-dev /out/ /rootfs/
@@ -586,8 +594,11 @@ COPY --link --from=init-amd64-dev /out/init /rootfs/sbin/init
 COPY --link --from=vmtouch-amd64-dev /out/vmtouch /rootfs/bin/
 COPY --link --from=tini-amd64-dev /out/tini /rootfs/sbin/tini
 RUN mkdir -p /rootfs/proc /rootfs/sys /rootfs/mnt /rootfs/run /rootfs/tmp /rootfs/dev /rootfs/var /rootfs/etc && mknod /rootfs/dev/null c 1 3 && chmod 666 /rootfs/dev/null
-RUN mkdir /out/ && mkisofs -R -o /out/rootfs.bin /rootfs/
-# RUN isoinfo -i /out/rootfs.bin -l
+# Karkhana carried patch: squashfs (zstd) instead of an uncompressed ISO9660.
+# The ISO was 536 MB of the 627 MB engine download. The kernel mounts
+# root=/dev/vda with no rootfstype and probes every built-in filesystem, and
+# c2w's init never names the root fs type, so only the kernel needs to know it.
+RUN mkdir /out/ && mksquashfs /rootfs/ /out/rootfs.bin -comp zstd -no-xattrs -noappend
 
 FROM ubuntu:22.04 AS bochs-config-dev
 ARG VM_MEMORY_SIZE_MB
@@ -696,6 +707,11 @@ COPY --link --from=assets ./config/qemu/linux_x86_config ./.config
 # Karkhana carried patch: virtio-rng so the crng initializes at boot instead of
 # blocking TLS (getrandom) for minutes under TCG jitter-entropy.
 RUN echo 'CONFIG_HW_RANDOM_VIRTIO=y' >> .config
+# Karkhana carried patch: the rootfs is squashfs+zstd (see rootfs-amd64-dev).
+# olddefconfig resolves the new symbols' dependencies (ZSTD_DECOMPRESS).
+RUN echo 'CONFIG_SQUASHFS=y' >> .config && echo 'CONFIG_SQUASHFS_ZSTD=y' >> .config \
+    && make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- olddefconfig \
+    && grep -q '^CONFIG_SQUASHFS_ZSTD=y' .config
 RUN make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- -j$(nproc) all && \
     mkdir /out && \
     mv /work-buildlinux/linux/arch/x86/boot/bzImage /out/bzImage && \
