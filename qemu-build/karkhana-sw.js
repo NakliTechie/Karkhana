@@ -74,7 +74,14 @@ const bridgeAi = async (request) => {
 };
 
 self.addEventListener('install', (e) => self.skipWaiting());
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+// Every publish renames CACHE (publish.sh stamps the engine id), so the previous
+// engine's cache is dead weight: ~600 MB per superseded engine per visitor.
+// Drop every karkhana-engine-* cache that is not this one.
+self.addEventListener('activate', (e) => e.waitUntil((async () => {
+  for (const k of await caches.keys())
+    if (k.startsWith('karkhana-engine-') && k !== CACHE) await caches.delete(k);
+  await self.clients.claim();
+})()));
 
 self.addEventListener('message', (e) => {
   if (e.data === 'karkhana-clear-cache') e.waitUntil(caches.delete(CACHE));
