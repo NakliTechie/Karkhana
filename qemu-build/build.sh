@@ -22,7 +22,7 @@ mkdir -p "$OUT"
 "$C2W" --to-js --target-arch=amd64 \
   --dockerfile "$DOCKERFILE" \
   --build-arg SOURCE_REPO_VERSION=main \
-  --build-arg VM_MEMORY_SIZE_MB=1024 \
+  --build-arg VM_MEMORY_SIZE_MB=1792 \
   --build-arg LINUX_LOGLEVEL=0 \
   --build-arg QEMU_MIGRATION=true \
   --build-arg VM_CORE_NUMS=4 \
@@ -33,7 +33,8 @@ ls -la "$OUT"
 
 echo "==> Installing Karkhana console page + vendored terminal assets…"
 cp "$(pwd)/karkhana.html" "$OUT/karkhana.html"
-cp -R "$(pwd)/vendor" "$OUT/vendor"
+# rm first: cp -R into an existing dir nests it (vendor/vendor) on every rebuild.
+rm -rf "$OUT/vendor" && cp -R "$(pwd)/vendor" "$OUT/vendor"
 echo "==> Serve: python3 serve.py 8793 (from qemu-build/) then open http://127.0.0.1:8793/karkhana.html"
 
 echo "==> Building network stack (c2w-net-proxy + in-page gvisor stack)…"
