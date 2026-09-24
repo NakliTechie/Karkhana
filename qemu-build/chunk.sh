@@ -34,7 +34,7 @@ done
 # Everything above the cap gets split; the manifest records order and size so
 # the page can show real progress and verify what it assembled.
 python3 - "$SRC" "$STAGE" "$CHUNK_BYTES" <<'PY'
-import json, os, sys
+import hashlib, json, os, sys
 
 src, stage, chunk = sys.argv[1], sys.argv[2], int(sys.argv[3])
 manifest = {}
@@ -54,6 +54,7 @@ for name in sorted(os.listdir(src)):
         continue
 
     parts = []
+    whole = hashlib.sha256()
     # aa, ab, ac ... matching `split -d` conventions the old layout used
     with open(path, "rb") as fh:
         i = 0
@@ -65,10 +66,15 @@ for name in sorted(os.listdir(src)):
             part = f"{name}.part{suffix}"
             with open(os.path.join(stage, "engine", part), "wb") as out:
                 out.write(buf)
+            whole.update(buf)
             parts.append(part)
             i += 1
 
-    manifest[name] = {"parts": parts, "size": size}
+    # sha256 is what the page verifies the reassembled blob against before it
+    # caches it. Part names repeat across engines (partaa, partab ...), so a
+    # stale edge or HTTP cache can hand back the previous engine's part under
+    # the same name; size alone cannot catch a stale 20 MB middle part.
+    manifest[name] = {"parts": parts, "size": size, "sha256": whole.hexdigest()}
     print(f"    {name}: {size / 1048576:.0f} MB -> {len(parts)} parts")
 
 if not manifest:

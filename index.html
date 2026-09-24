@@ -390,17 +390,42 @@
               const cache = await caches.open('karkhana-engine-32be4e158a82').catch(() => null);
               let done = 0;
               const total = Object.values(mf).reduce((a, f) => a + f.size, 0);
+              // A reassembled engine is cached only after it matches the manifest.
+              // Part names repeat across engines (partaa, partab ...), so a stale
+              // edge or HTTP cache can hand back the previous engine's part under
+              // the same name; cached unchecked, that mix booted into a silent
+              // hang on every later load (2026-09-24, engine 32be4e158a82).
+              const verified = async (blob, f) => {
+                if (blob.size !== f.size) return false;
+                if (!f.sha256) return true;
+                const d = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+                return Array.from(new Uint8Array(d), (x) => x.toString(16).padStart(2, '0')).join('') === f.sha256;
+              };
               for (const [name, f] of Object.entries(mf)) {
-                const key = '/assembled/' + name;
+                // Keyed by content hash: an entry exists only if it verified, so a
+                // hit needs no re-hash, and name-only entries from the old loader
+                // (possibly poisoned) are never read again.
+                const key = '/assembled/' + name + (f.sha256 ? '?sha256=' + f.sha256 : '');
+                if (cache && f.sha256) { try { await cache.delete('/assembled/' + name); } catch (e) {} }
                 let resp = cache && await cache.match(key);
                 if (!resp) {
-                  const bufs = [];
-                  for (const part of f.parts) {
-                    const b = await (await fetch('engine/' + part)).arrayBuffer();
-                    bufs.push(b); done += b.byteLength;
-                    setStage('downloading engine — ' + (done / 1048576 | 0) + ' / ' + (total / 1048576 | 0) + ' MB (cached after first load)', Math.min(30, Math.round(done / total * 30)));
+                  let blob = null;
+                  for (let attempt = 0; attempt < 2 && !blob; attempt++) {
+                    const bufs = [];
+                    let got = 0;
+                    for (const part of f.parts) {
+                      // The query keys the part to this engine; attempt 2 also
+                      // bypasses the HTTP cache.
+                      const url = 'engine/' + part + (f.sha256 ? '?v=' + f.sha256.slice(0, 12) : '');
+                      const b = await (await fetch(url, attempt ? { cache: 'reload' } : {})).arrayBuffer();
+                      bufs.push(b); got += b.byteLength; done += b.byteLength;
+                      setStage('downloading engine — ' + (done / 1048576 | 0) + ' / ' + (total / 1048576 | 0) + ' MB (cached after first load)', Math.min(30, Math.round(done / total * 30)));
+                    }
+                    const candidate = new Blob(bufs, { type: name.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream' });
+                    if (await verified(candidate, f)) blob = candidate;
+                    else { done -= got; console.warn('engine: ' + name + ' failed verification, refetching'); }
                   }
-                  const blob = new Blob(bufs, { type: name.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream' });
+                  if (!blob) throw new Error(name + ' failed verification twice — the site may be mid-deploy; reload in a few minutes');
                   if (cache) { try { await cache.put(key, new Response(blob)); } catch (e) {} }
                   engineUrls[name] = URL.createObjectURL(blob);
                 } else {
