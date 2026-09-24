@@ -12,33 +12,15 @@
    "qemu-system-x86_64.data.partai",
    "qemu-system-x86_64.data.partaj",
    "qemu-system-x86_64.data.partak",
-   "qemu-system-x86_64.data.partal",
-   "qemu-system-x86_64.data.partam",
-   "qemu-system-x86_64.data.partan",
-   "qemu-system-x86_64.data.partao",
-   "qemu-system-x86_64.data.partap",
-   "qemu-system-x86_64.data.partaq",
-   "qemu-system-x86_64.data.partar",
-   "qemu-system-x86_64.data.partas",
-   "qemu-system-x86_64.data.partat",
-   "qemu-system-x86_64.data.partau",
-   "qemu-system-x86_64.data.partav",
-   "qemu-system-x86_64.data.partaw",
-   "qemu-system-x86_64.data.partax",
-   "qemu-system-x86_64.data.partay",
-   "qemu-system-x86_64.data.partaz",
-   "qemu-system-x86_64.data.partba",
-   "qemu-system-x86_64.data.partbb",
-   "qemu-system-x86_64.data.partbc",
-   "qemu-system-x86_64.data.partbd"
+   "qemu-system-x86_64.data.partal"
   ],
-  "size": 627185316
+  "size": 249372803
  },
  "qemu-system-x86_64.wasm": {
   "parts": [
    "qemu-system-x86_64.wasm.partaa",
    "qemu-system-x86_64.wasm.partab"
   ],
-  "size": 41244155
+  "size": 41244157
  }
 }

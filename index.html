@@ -387,7 +387,7 @@
             } catch (e) { /* direct mode */ }
             if (mf) {
               const engineUrls = {};
-              const cache = await caches.open('karkhana-engine-a9f5bc9e7a7f').catch(() => null);
+              const cache = await caches.open('karkhana-engine-32be4e158a82').catch(() => null);
               let done = 0;
               const total = Object.values(mf).reduce((a, f) => a + f.size, 0);
               for (const [name, f] of Object.entries(mf)) {
