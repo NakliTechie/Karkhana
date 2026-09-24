@@ -1,7 +1,7 @@
 Module['arguments'] =
 [
     "-incoming", "file:/pack/vm.state",
-    "-object", "rng-builtin,id=rng0", "-device", "virtio-rng-pci,rng=rng0", "-nographic", "-m", "1024M", "-accel", "tcg,tb-size=500,thread=multi", "-smp", "4,sockets=4",
+    "-object", "rng-builtin,id=rng0", "-device", "virtio-rng-pci,rng=rng0", "-nographic", "-m", "1792M", "-accel", "tcg,tb-size=500,thread=multi", "-smp", "4,sockets=4",
     "-L", "/pack/",
     "-drive", "if=virtio,format=raw,file=/pack/rootfs.bin",
     "-kernel", "/pack/bzImage",

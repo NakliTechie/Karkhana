@@ -7213,21 +7213,21 @@ var proxiedFunctionTable = [ _proc_exit, exitOnMainThread, pthreadCreateProxied,
 
 function instantiate_wasm() {
   const memory_v = new DataView(HEAP8.buffer);
-  const tb_ptr = memory_v.getInt32(Module.__wasm32_tb.tb_ptr_ptr, true);
-  const export_vec_size = memory_v.getInt32(tb_ptr + 4, true);
+  const tb_ptr = memory_v.getUint32(Module.__wasm32_tb.tb_ptr_ptr, true);
+  const export_vec_size = memory_v.getUint32(tb_ptr + 4, true);
   const export_vec_begin = tb_ptr + 4 + 4;
-  const counter_vec_size = memory_v.getInt32(export_vec_begin + export_vec_size, true);
+  const counter_vec_size = memory_v.getUint32(export_vec_begin + export_vec_size, true);
   const counter_vec_begin = export_vec_begin + export_vec_size + 4;
-  const tmp_body_size = memory_v.getInt32(counter_vec_begin + counter_vec_size, true);
+  const tmp_body_size = memory_v.getUint32(counter_vec_begin + counter_vec_size, true);
   const tmp_body_begin = counter_vec_begin + counter_vec_size + 4;
-  const wasm_size = memory_v.getInt32(tmp_body_begin + tmp_body_size, true);
+  const wasm_size = memory_v.getUint32(tmp_body_begin + tmp_body_size, true);
   const wasm_begin = tmp_body_begin + tmp_body_size + 4;
-  const import_vec_size = memory_v.getInt32(wasm_begin + wasm_size, true);
+  const import_vec_size = memory_v.getUint32(wasm_begin + wasm_size, true);
   const import_vec_begin = wasm_begin + wasm_size + 4;
   const wasmBytes = new Uint8Array(HEAP8.slice(wasm_begin, wasm_begin + wasm_size));
   var helper = {};
   for (var i = 0; i < import_vec_size / 4; i++) {
-    helper[i] = wasmTable.get(memory_v.getInt32(import_vec_begin + i * 4, true));
+    helper[i] = wasmTable.get(memory_v.getUint32(import_vec_begin + i * 4, true));
   }
   const mod = new WebAssembly.Module(wasmBytes);
   const inst = new WebAssembly.Instance(mod, {
@@ -7243,24 +7243,24 @@ function instantiate_wasm() {
 
 function remove_module_js() {
   const memory_v = new DataView(HEAP8.buffer);
-  const remove_n = memory_v.getInt32(Module.__wasm32_tb.to_remove_instance_idx_ptr, true);
+  const remove_n = memory_v.getUint32(Module.__wasm32_tb.to_remove_instance_idx_ptr, true);
   for (var i = 0; i < remove_n * 4; i += 4) {
-    removeFunction(memory_v.getInt32(Module.__wasm32_tb.to_remove_instance_ptr + i, true));
+    removeFunction(memory_v.getUint32(Module.__wasm32_tb.to_remove_instance_ptr + i, true));
   }
   memory_v.setInt32(Module.__wasm32_tb.to_remove_instance_idx_ptr, 0, true);
 }
 
 function init_wasm32_js(tb_ptr_ptr, cur_core_num, to_remove_instance_ptr, to_remove_instance_idx_ptr, instance_garbage_collected_ptr) {
   Module.__wasm32_tb = {
-    tb_ptr_ptr,
+    tb_ptr_ptr: tb_ptr_ptr >>> 0,
     cur_core_num,
-    to_remove_instance_ptr,
-    to_remove_instance_idx_ptr,
-    instance_garbage_collected_ptr,
+    to_remove_instance_ptr: to_remove_instance_ptr >>> 0,
+    to_remove_instance_idx_ptr: to_remove_instance_idx_ptr >>> 0,
+    instance_garbage_collected_ptr: instance_garbage_collected_ptr >>> 0,
     inst_gc_registry: new FinalizationRegistry(i => {
       if (i == "instance") {
         const memory_v = new DataView(HEAP8.buffer);
-        let v = memory_v.getInt32(Module.__wasm32_tb.instance_garbage_collected_ptr, true);
+        let v = memory_v.getUint32(Module.__wasm32_tb.instance_garbage_collected_ptr, true);
         memory_v.setInt32(Module.__wasm32_tb.instance_garbage_collected_ptr, v + 1, true);
       }
     })
@@ -7268,16 +7268,16 @@ function init_wasm32_js(tb_ptr_ptr, cur_core_num, to_remove_instance_ptr, to_rem
 }
 
 function unbox_small_structs(type_ptr) {
-  var type_id = HEAPU16[(type_ptr + 6 >> 1) + 0 >>> 0];
+  var type_id = HEAPU16[((type_ptr + 6) >>> 1) + 0 >>> 0];
   while (type_id === 13) {
-    var elements = HEAPU32[(type_ptr + 8 >> 2) + 0 >>> 0];
-    var first_element = HEAPU32[(elements >> 2) + 0 >>> 0];
+    var elements = HEAPU32[((type_ptr + 8) >>> 2) + 0 >>> 0];
+    var first_element = HEAPU32[((elements) >>> 2) + 0 >>> 0];
     if (first_element === 0) {
       type_id = 0;
       break;
-    } else if (HEAPU32[(elements >> 2) + 1 >>> 0] === 0) {
+    } else if (HEAPU32[((elements) >>> 2) + 1 >>> 0] === 0) {
       type_ptr = first_element;
-      type_id = HEAPU16[(first_element + 6 >> 1) + 0 >>> 0];
+      type_id = HEAPU16[((first_element + 6) >>> 1) + 0 >>> 0];
     } else {
       break;
     }
@@ -7286,11 +7286,11 @@ function unbox_small_structs(type_ptr) {
 }
 
 function ffi_call_js(cif, fn, rvalue, avalue) {
-  var abi = HEAPU32[(cif >> 2) + 0 >>> 0];
-  var nargs = HEAPU32[(cif >> 2) + 1 >>> 0];
-  var nfixedargs = HEAPU32[(cif >> 2) + 6 >>> 0];
-  var arg_types_ptr = HEAPU32[(cif >> 2) + 2 >>> 0];
-  var rtype_unboxed = unbox_small_structs(HEAPU32[(cif >> 2) + 3 >>> 0]);
+  var abi = HEAPU32[((cif) >>> 2) + 0 >>> 0];
+  var nargs = HEAPU32[((cif) >>> 2) + 1 >>> 0];
+  var nfixedargs = HEAPU32[((cif) >>> 2) + 6 >>> 0];
+  var arg_types_ptr = HEAPU32[((cif) >>> 2) + 2 >>> 0];
+  var rtype_unboxed = unbox_small_structs(HEAPU32[((cif) >>> 2) + 3 >>> 0]);
   var rtype_ptr = rtype_unboxed[0];
   var rtype_id = rtype_unboxed[1];
   var orig_stack_ptr = stackSave();
@@ -7308,8 +7308,8 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
     ret_by_arg = (!!1);
   }
   for (var i = 0; i < nfixedargs; i++) {
-    var arg_ptr = HEAPU32[(avalue >> 2) + i >>> 0];
-    var arg_unboxed = unbox_small_structs(HEAPU32[(arg_types_ptr >> 2) + i >>> 0]);
+    var arg_ptr = HEAPU32[((avalue) >>> 2) + i >>> 0];
+    var arg_unboxed = unbox_small_structs(HEAPU32[((arg_types_ptr) >>> 2) + i >>> 0]);
     var arg_type_ptr = arg_unboxed[0];
     var arg_type_id = arg_unboxed[1];
     switch (arg_type_id) {
@@ -7317,17 +7317,17 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
      case 10:
      case 9:
      case 14:
-      args.push(HEAPU32[(arg_ptr >> 2) + 0 >>> 0]);
+      args.push(HEAPU32[((arg_ptr) >>> 2) + 0 >>> 0]);
       ;
       break;
 
      case 2:
-      args.push(HEAPF32[(arg_ptr >> 2) + 0 >>> 0]);
+      args.push(HEAPF32[((arg_ptr) >>> 2) + 0 >>> 0]);
       ;
       break;
 
      case 3:
-      args.push(HEAPF64[(arg_ptr >> 3) + 0 >>> 0]);
+      args.push(HEAPF64[((arg_ptr) >>> 3) + 0 >>> 0]);
       ;
       break;
 
@@ -7342,30 +7342,30 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
       break;
 
      case 7:
-      args.push(HEAPU16[(arg_ptr >> 1) + 0 >>> 0]);
+      args.push(HEAPU16[((arg_ptr) >>> 1) + 0 >>> 0]);
       ;
       break;
 
      case 8:
-      args.push(HEAP16[(arg_ptr >> 1) + 0 >>> 0]);
+      args.push(HEAP16[((arg_ptr) >>> 1) + 0 >>> 0]);
       ;
       break;
 
      case 11:
      case 12:
-      args.push(HEAPU64[(arg_ptr >> 3) + 0 >>> 0]);
+      args.push(HEAPU64[((arg_ptr) >>> 3) + 0 >>> 0]);
       ;
       break;
 
      case 4:
-      args.push(HEAPU64[(arg_ptr >> 3) + 0 >>> 0]);
-      args.push(HEAPU64[(arg_ptr >> 3) + 1 >>> 0]);
+      args.push(HEAPU64[((arg_ptr) >>> 3) + 0 >>> 0]);
+      args.push(HEAPU64[((arg_ptr) >>> 3) + 1 >>> 0]);
       ;
       break;
 
      case 13:
-      var size = HEAPU32[(arg_type_ptr >> 2) + 0 >>> 0];
-      var align = HEAPU16[(arg_type_ptr + 4 >> 1) + 0 >>> 0];
+      var size = HEAPU32[((arg_type_ptr) >>> 2) + 0 >>> 0];
+      var align = HEAPU16[((arg_type_ptr + 4) >>> 1) + 0 >>> 0];
       ((cur_stack_ptr -= (size)), (cur_stack_ptr &= (~((align) - 1))));
       HEAP8.subarray(cur_stack_ptr >>> 0, cur_stack_ptr + size >>> 0).set(HEAP8.subarray(arg_ptr >>> 0, arg_ptr + size >>> 0));
       args.push(cur_stack_ptr);
@@ -7382,8 +7382,8 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
   if (nfixedargs != nargs) {
     var struct_arg_info = [];
     for (var i = nargs - 1; i >= nfixedargs; i--) {
-      var arg_ptr = HEAPU32[(avalue >> 2) + i >>> 0];
-      var arg_unboxed = unbox_small_structs(HEAPU32[(arg_types_ptr >> 2) + i >>> 0]);
+      var arg_ptr = HEAPU32[((avalue) >>> 2) + i >>> 0];
+      var arg_unboxed = unbox_small_structs(HEAPU32[((arg_types_ptr) >>> 2) + i >>> 0]);
       var arg_type_ptr = arg_unboxed[0];
       var arg_type_id = arg_unboxed[1];
       switch (arg_type_id) {
@@ -7396,7 +7396,7 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
        case 7:
        case 8:
         ((cur_stack_ptr -= (2)), (cur_stack_ptr &= (~((2) - 1))));
-        HEAPU16[(cur_stack_ptr >> 1) + 0 >>> 0] = HEAPU16[(arg_ptr >> 1) + 0 >>> 0];
+        HEAPU16[((cur_stack_ptr) >>> 1) + 0 >>> 0] = HEAPU16[((arg_ptr) >>> 1) + 0 >>> 0];
         break;
 
        case 1:
@@ -7405,28 +7405,28 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
        case 14:
        case 2:
         ((cur_stack_ptr -= (4)), (cur_stack_ptr &= (~((4) - 1))));
-        HEAPU32[(cur_stack_ptr >> 2) + 0 >>> 0] = HEAPU32[(arg_ptr >> 2) + 0 >>> 0];
+        HEAPU32[((cur_stack_ptr) >>> 2) + 0 >>> 0] = HEAPU32[((arg_ptr) >>> 2) + 0 >>> 0];
         break;
 
        case 3:
        case 11:
        case 12:
         ((cur_stack_ptr -= (8)), (cur_stack_ptr &= (~((8) - 1))));
-        HEAPU32[(cur_stack_ptr >> 2) + 0 >>> 0] = HEAPU32[(arg_ptr >> 2) + 0 >>> 0];
-        HEAPU32[(cur_stack_ptr >> 2) + 1 >>> 0] = HEAPU32[(arg_ptr >> 2) + 1 >>> 0];
+        HEAPU32[((cur_stack_ptr) >>> 2) + 0 >>> 0] = HEAPU32[((arg_ptr) >>> 2) + 0 >>> 0];
+        HEAPU32[((cur_stack_ptr) >>> 2) + 1 >>> 0] = HEAPU32[((arg_ptr) >>> 2) + 1 >>> 0];
         break;
 
        case 4:
         ((cur_stack_ptr -= (16)), (cur_stack_ptr &= (~((8) - 1))));
-        HEAPU32[(cur_stack_ptr >> 2) + 0 >>> 0] = HEAPU32[(arg_ptr >> 2) + 0 >>> 0];
-        HEAPU32[(cur_stack_ptr >> 2) + 1 >>> 0] = HEAPU32[(arg_ptr >> 2) + 1 >>> 0];
-        HEAPU32[(cur_stack_ptr >> 2) + 2 >>> 0] = HEAPU32[(arg_ptr >> 2) + 2 >>> 0];
-        HEAPU32[(cur_stack_ptr >> 2) + 3 >>> 0] = HEAPU32[(arg_ptr >> 2) + 3 >>> 0];
+        HEAPU32[((cur_stack_ptr) >>> 2) + 0 >>> 0] = HEAPU32[((arg_ptr) >>> 2) + 0 >>> 0];
+        HEAPU32[((cur_stack_ptr) >>> 2) + 1 >>> 0] = HEAPU32[((arg_ptr) >>> 2) + 1 >>> 0];
+        HEAPU32[((cur_stack_ptr) >>> 2) + 2 >>> 0] = HEAPU32[((arg_ptr) >>> 2) + 2 >>> 0];
+        HEAPU32[((cur_stack_ptr) >>> 2) + 3 >>> 0] = HEAPU32[((arg_ptr) >>> 2) + 3 >>> 0];
         break;
 
        case 13:
         ((cur_stack_ptr -= (4)), (cur_stack_ptr &= (~((4) - 1))));
-        struct_arg_info.push([ cur_stack_ptr, arg_ptr, HEAPU32[(arg_type_ptr >> 2) + 0 >>> 0], HEAPU16[(arg_type_ptr + 4 >> 1) + 0 >>> 0] ]);
+        struct_arg_info.push([ cur_stack_ptr, arg_ptr, HEAPU32[((arg_type_ptr) >>> 2) + 0 >>> 0], HEAPU16[((arg_type_ptr + 4) >>> 1) + 0 >>> 0] ]);
         break;
 
        case 15:
@@ -7445,7 +7445,7 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
       var align = struct_info[3];
       ((cur_stack_ptr -= (size)), (cur_stack_ptr &= (~((align) - 1))));
       HEAP8.subarray(cur_stack_ptr >>> 0, cur_stack_ptr + size >>> 0).set(HEAP8.subarray(arg_ptr >>> 0, arg_ptr + size >>> 0));
-      HEAPU32[(arg_target >> 2) + 0 >>> 0] = cur_stack_ptr;
+      HEAPU32[((arg_target) >>> 2) + 0 >>> 0] = cur_stack_ptr;
     }
   }
   stackRestore(cur_stack_ptr);
@@ -7463,15 +7463,15 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
    case 9:
    case 10:
    case 14:
-    HEAPU32[(rvalue >> 2) + 0 >>> 0] = result;
+    HEAPU32[((rvalue) >>> 2) + 0 >>> 0] = result;
     break;
 
    case 2:
-    HEAPF32[(rvalue >> 2) + 0 >>> 0] = result;
+    HEAPF32[((rvalue) >>> 2) + 0 >>> 0] = result;
     break;
 
    case 3:
-    HEAPF64[(rvalue >> 3) + 0 >>> 0] = result;
+    HEAPF64[((rvalue) >>> 3) + 0 >>> 0] = result;
     break;
 
    case 5:
@@ -7481,12 +7481,12 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
 
    case 7:
    case 8:
-    HEAPU16[(rvalue >> 1) + 0 >>> 0] = result;
+    HEAPU16[((rvalue) >>> 1) + 0 >>> 0] = result;
     break;
 
    case 11:
    case 12:
-    HEAPU64[(rvalue >> 3) + 0 >>> 0] = result;
+    HEAPU64[((rvalue) >>> 3) + 0 >>> 0] = result;
     break;
 
    case 15:
@@ -7500,23 +7500,23 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
 function ffi_closure_alloc_js(size, code) {
   var closure = _malloc(size);
   var index = getEmptyTableSlot();
-  HEAPU32[(code >> 2) + 0 >>> 0] = index;
-  HEAPU32[(closure >> 2) + 0 >>> 0] = index;
+  HEAPU32[((code) >>> 2) + 0 >>> 0] = index;
+  HEAPU32[((closure) >>> 2) + 0 >>> 0] = index;
   return closure;
 }
 
 function ffi_closure_free_js(closure) {
-  var index = HEAPU32[(closure >> 2) + 0 >>> 0];
+  var index = HEAPU32[((closure) >>> 2) + 0 >>> 0];
   freeTableIndexes.push(index);
   _free(closure);
 }
 
 function ffi_prep_closure_loc_js(closure, cif, fun, user_data, codeloc) {
-  var abi = HEAPU32[(cif >> 2) + 0 >>> 0];
-  var nargs = HEAPU32[(cif >> 2) + 1 >>> 0];
-  var nfixedargs = HEAPU32[(cif >> 2) + 6 >>> 0];
-  var arg_types_ptr = HEAPU32[(cif >> 2) + 2 >>> 0];
-  var rtype_unboxed = unbox_small_structs(HEAPU32[(cif >> 2) + 3 >>> 0]);
+  var abi = HEAPU32[((cif) >>> 2) + 0 >>> 0];
+  var nargs = HEAPU32[((cif) >>> 2) + 1 >>> 0];
+  var nfixedargs = HEAPU32[((cif) >>> 2) + 6 >>> 0];
+  var arg_types_ptr = HEAPU32[((cif) >>> 2) + 2 >>> 0];
+  var rtype_unboxed = unbox_small_structs(HEAPU32[((cif) >>> 2) + 3 >>> 0]);
   var rtype_ptr = rtype_unboxed[0];
   var rtype_id = rtype_unboxed[1];
   var sig;
@@ -7565,11 +7565,11 @@ function ffi_prep_closure_loc_js(closure, cif, fun, user_data, codeloc) {
   var unboxed_arg_type_id_list = [];
   var unboxed_arg_type_info_list = [];
   for (var i = 0; i < nargs; i++) {
-    var arg_unboxed = unbox_small_structs(HEAPU32[(arg_types_ptr >> 2) + i >>> 0]);
+    var arg_unboxed = unbox_small_structs(HEAPU32[((arg_types_ptr) >>> 2) + i >>> 0]);
     var arg_type_ptr = arg_unboxed[0];
     var arg_type_id = arg_unboxed[1];
     unboxed_arg_type_id_list.push(arg_type_id);
-    unboxed_arg_type_info_list.push([ HEAPU32[(arg_type_ptr >> 2) + 0 >>> 0], HEAPU16[(arg_type_ptr + 4 >> 1) + 0 >>> 0] ]);
+    unboxed_arg_type_info_list.push([ HEAPU32[((arg_type_ptr) >>> 2) + 0 >>> 0], HEAPU16[((arg_type_ptr + 4) >>> 1) + 0 >>> 0] ]);
   }
   for (var i = 0; i < nfixedargs; i++) {
     switch (unboxed_arg_type_id_list[i]) {
@@ -7639,15 +7639,15 @@ function ffi_prep_closure_loc_js(closure, cif, fun, user_data, codeloc) {
        case 5:
        case 6:
         ((cur_ptr -= (1)), (cur_ptr &= (~((4) - 1))));
-        HEAPU32[(args_ptr >> 2) + carg_idx >>> 0] = cur_ptr;
+        HEAPU32[((args_ptr) >>> 2) + carg_idx >>> 0] = cur_ptr;
         HEAPU8[cur_ptr + 0 >>> 0] = cur_arg;
         break;
 
        case 7:
        case 8:
         ((cur_ptr -= (2)), (cur_ptr &= (~((4) - 1))));
-        HEAPU32[(args_ptr >> 2) + carg_idx >>> 0] = cur_ptr;
-        HEAPU16[(cur_ptr >> 1) + 0 >>> 0] = cur_arg;
+        HEAPU32[((args_ptr) >>> 2) + carg_idx >>> 0] = cur_ptr;
+        HEAPU16[((cur_ptr) >>> 1) + 0 >>> 0] = cur_arg;
         break;
 
        case 1:
@@ -7655,41 +7655,41 @@ function ffi_prep_closure_loc_js(closure, cif, fun, user_data, codeloc) {
        case 10:
        case 14:
         ((cur_ptr -= (4)), (cur_ptr &= (~((4) - 1))));
-        HEAPU32[(args_ptr >> 2) + carg_idx >>> 0] = cur_ptr;
-        HEAPU32[(cur_ptr >> 2) + 0 >>> 0] = cur_arg;
+        HEAPU32[((args_ptr) >>> 2) + carg_idx >>> 0] = cur_ptr;
+        HEAPU32[((cur_ptr) >>> 2) + 0 >>> 0] = cur_arg;
         break;
 
        case 13:
         ((cur_ptr -= (arg_size)), (cur_ptr &= (~((arg_align) - 1))));
         HEAP8.subarray(cur_ptr >>> 0, cur_ptr + arg_size >>> 0).set(HEAP8.subarray(cur_arg >>> 0, cur_arg + arg_size >>> 0));
-        HEAPU32[(args_ptr >> 2) + carg_idx >>> 0] = cur_ptr;
+        HEAPU32[((args_ptr) >>> 2) + carg_idx >>> 0] = cur_ptr;
         break;
 
        case 2:
         ((cur_ptr -= (4)), (cur_ptr &= (~((4) - 1))));
-        HEAPU32[(args_ptr >> 2) + carg_idx >>> 0] = cur_ptr;
-        HEAPF32[(cur_ptr >> 2) + 0 >>> 0] = cur_arg;
+        HEAPU32[((args_ptr) >>> 2) + carg_idx >>> 0] = cur_ptr;
+        HEAPF32[((cur_ptr) >>> 2) + 0 >>> 0] = cur_arg;
         break;
 
        case 3:
         ((cur_ptr -= (8)), (cur_ptr &= (~((8) - 1))));
-        HEAPU32[(args_ptr >> 2) + carg_idx >>> 0] = cur_ptr;
-        HEAPF64[(cur_ptr >> 3) + 0 >>> 0] = cur_arg;
+        HEAPU32[((args_ptr) >>> 2) + carg_idx >>> 0] = cur_ptr;
+        HEAPF64[((cur_ptr) >>> 3) + 0 >>> 0] = cur_arg;
         break;
 
        case 11:
        case 12:
         ((cur_ptr -= (8)), (cur_ptr &= (~((8) - 1))));
-        HEAPU32[(args_ptr >> 2) + carg_idx >>> 0] = cur_ptr;
-        HEAPU64[(cur_ptr >> 3) + 0 >>> 0] = cur_arg;
+        HEAPU32[((args_ptr) >>> 2) + carg_idx >>> 0] = cur_ptr;
+        HEAPU64[((cur_ptr) >>> 3) + 0 >>> 0] = cur_arg;
         break;
 
        case 4:
         ((cur_ptr -= (16)), (cur_ptr &= (~((8) - 1))));
-        HEAPU32[(args_ptr >> 2) + carg_idx >>> 0] = cur_ptr;
-        HEAPU64[(cur_ptr >> 3) + 0 >>> 0] = cur_arg;
+        HEAPU32[((args_ptr) >>> 2) + carg_idx >>> 0] = cur_ptr;
+        HEAPU64[((cur_ptr) >>> 3) + 0 >>> 0] = cur_arg;
         cur_arg = args[jsarg_idx++];
-        HEAPU64[(cur_ptr >> 3) + 1 >>> 0] = cur_arg;
+        HEAPU64[((cur_ptr) >>> 3) + 1 >>> 0] = cur_arg;
         break;
       }
     }
@@ -7700,33 +7700,33 @@ function ffi_prep_closure_loc_js(closure, cif, fun, user_data, codeloc) {
       var arg_size = arg_type_info[0];
       var arg_align = arg_type_info[1];
       if (arg_type_id === 13) {
-        var struct_ptr = HEAPU32[(varargs >> 2) + 0 >>> 0];
+        var struct_ptr = HEAPU32[((varargs) >>> 2) + 0 >>> 0];
         ((cur_ptr -= (arg_size)), (cur_ptr &= (~((arg_align) - 1))));
         HEAP8.subarray(cur_ptr >>> 0, cur_ptr + arg_size >>> 0).set(HEAP8.subarray(struct_ptr >>> 0, struct_ptr + arg_size >>> 0));
-        HEAPU32[(args_ptr >> 2) + carg_idx >>> 0] = cur_ptr;
+        HEAPU32[((args_ptr) >>> 2) + carg_idx >>> 0] = cur_ptr;
       } else {
-        HEAPU32[(args_ptr >> 2) + carg_idx >>> 0] = varargs;
+        HEAPU32[((args_ptr) >>> 2) + carg_idx >>> 0] = varargs;
       }
       varargs += 4;
     }
     stackRestore(cur_ptr);
     stackAlloc(0);
     0;
-    getWasmTableEntry(HEAPU32[(closure >> 2) + 2 >>> 0])(HEAPU32[(closure >> 2) + 1 >>> 0], ret_ptr, args_ptr, HEAPU32[(closure >> 2) + 3 >>> 0]);
+    getWasmTableEntry(HEAPU32[((closure) >>> 2) + 2 >>> 0])(HEAPU32[((closure) >>> 2) + 1 >>> 0], ret_ptr, args_ptr, HEAPU32[((closure) >>> 2) + 3 >>> 0]);
     stackRestore(orig_stack_ptr);
     if (!ret_by_arg) {
       switch (sig[0]) {
        case "i":
-        return HEAPU32[(ret_ptr >> 2) + 0 >>> 0];
+        return HEAPU32[((ret_ptr) >>> 2) + 0 >>> 0];
 
        case "j":
-        return HEAPU64[(ret_ptr >> 3) + 0 >>> 0];
+        return HEAPU64[((ret_ptr) >>> 3) + 0 >>> 0];
 
        case "d":
-        return HEAPF64[(ret_ptr >> 3) + 0 >>> 0];
+        return HEAPF64[((ret_ptr) >>> 3) + 0 >>> 0];
 
        case "f":
-        return HEAPF32[(ret_ptr >> 2) + 0 >>> 0];
+        return HEAPF32[((ret_ptr) >>> 2) + 0 >>> 0];
       }
     }
   }
@@ -7736,9 +7736,9 @@ function ffi_prep_closure_loc_js(closure, cif, fun, user_data, codeloc) {
     return 1;
   }
   setWasmTableEntry(codeloc, wasm_trampoline);
-  HEAPU32[(closure >> 2) + 1 >>> 0] = cif;
-  HEAPU32[(closure >> 2) + 2 >>> 0] = fun;
-  HEAPU32[(closure >> 2) + 3 >>> 0] = user_data;
+  HEAPU32[((closure) >>> 2) + 1 >>> 0] = cif;
+  HEAPU32[((closure) >>> 2) + 2 >>> 0] = fun;
+  HEAPU32[((closure) >>> 2) + 3 >>> 0] = user_data;
   return 0;
 }
 
