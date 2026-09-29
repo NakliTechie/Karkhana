@@ -11,15 +11,55 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const pause = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const failure = (code, message) => Object.assign(new Error(message), { code });
+const owners = new WeakMap();
 
 export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
   fetchImpl = globalThis.fetch, generation = globalThis.crypto.randomUUID(),
   scripts = {}, limits = FETCH_LIMITS, pypiOptions = {} } = {}) {
-  let running = false, timer, sweepTimer;
-  const pypi = createPyPIProcessor(pypiOptions);
-  const slots = Array.from({ length: limits.slots }, (_, index) => ({
-    path: `${root}/${index}`, seen: '', current: null,
-  }));
+  if (typeof root !== 'string' || !root.startsWith('/') || root.includes('\0'))
+    throw new Error('bridge root must be an absolute path');
+  const components = [];
+  for (const part of root.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') components.pop(); else components.push(part);
+  }
+  root = '/' + components.join('/');
+  if (root === '/') throw new Error('bridge root must be a dedicated directory');
+  if (typeof generation !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(generation))
+    throw new Error('invalid bridge generation');
+  for (const [name, maximum] of Object.entries(FETCH_LIMITS)) {
+    const value = limits[name];
+    if (!Number.isInteger(value) || value < (name === 'maxTimeoutMs' ? 1000 : 1)
+        || value > (name === 'pollMs' ? 1000 : maximum)) throw new Error(`invalid bridge limit: ${name}`);
+  }
+  const generationPrefix = generation.slice(0, 24);
+  let running = false, timer, sweepTimer, directory, rootIdentity;
+  let pypi = createPyPIProcessor(pypiOptions), slots = [];
+  let registry = owners.get(FS);
+  if (!registry) owners.set(FS, registry = new Map());
+  const owner = {};
+  function retire() {
+    if (running || stats.active) return;
+    for (const slot of slots) {
+      for (const name of ['request', 'request-ready', 'ready', 'chunk', 'ack', 'cancel']) {
+        try { write(`${slot.path}/${name}`, ''); } catch (_) {}
+        try { FS.unlink(`${slot.path}/${name}`); } catch (_) {}
+      }
+      try { FS.rmdir(slot.path); } catch (_) {}
+    }
+    if (directory) { try { FS.rmdir(directory); } catch (_) {} }
+    if (registry.get(rootIdentity) === owner) registry.delete(rootIdentity);
+  }
+  async function abortable(signal, operation) {
+    if (signal.aborted) throw new Error('request aborted');
+    let aborted;
+    const interrupt = new Promise((_, reject) => {
+      aborted = () => reject(new Error('request aborted'));
+      signal.addEventListener('abort', aborted, { once: true });
+    });
+    try { return await Promise.race([operation(), interrupt]); }
+    finally { signal.removeEventListener('abort', aborted); }
+  }
   const stats = { requests: 0, completed: 0, failed: 0, bytes: 0, active: 0 };
   function mkdir(path) { try { FS.mkdir(path); } catch (e) { if (!FS.stat(path).mode) throw e; } }
   function write(path, value) { FS.writeFile(path, typeof value === 'string' ? encoder.encode(value) : value); }
@@ -41,7 +81,7 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
     }
   }
   function validate(request, task) {
-    if (request.protocol !== 1 || request.generation !== generation || request.id !== task.id)
+    if (!request || typeof request !== 'object' || request.protocol !== 2 || request.generation !== generation || request.id !== task.id)
       throw new Error('request identity mismatch');
     if (typeof request.url !== 'string' || request.url.length > 8192) throw new Error('invalid URL');
     const url = new URL(request.url);
@@ -85,9 +125,40 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
       const { url, headers } = validate(request, task);
       timeout = setTimeout(() => { task.reason = 'request timed out'; task.controller.abort(); }, request.timeoutMs);
       check(slot, task);
-      const fetchRemote = (href, options) => fetchImpl(href, {
-        credentials: 'omit', referrerPolicy: 'no-referrer', mode: 'cors', redirect: 'error',
-        cache: 'no-store', ...options });
+      const fetchRemote = async (href, options) => {
+        const signal = options.signal;
+        const response = await abortable(signal, () => {
+          const pending = Promise.resolve(fetchImpl(href, {
+            credentials: 'omit', referrerPolicy: 'no-referrer', mode: 'cors', redirect: 'error',
+            cache: 'no-store', ...options }));
+          // A custom fetch can settle after cancellation. Discard that body too.
+          void pending.then(late => {
+            if (signal.aborted) void Promise.resolve().then(() => late.body?.cancel?.()).catch(() => {});
+          }, () => {});
+          return pending;
+        });
+        // Both the direct path and metadata processor receive abort-aware reads.
+        // The metadata processor still owns its session release in open/finally.
+        let upstream, cancellation;
+        const cancel = () => {
+          signal.removeEventListener('abort', onAbort);
+          return cancellation ||= Promise.resolve().then(() => upstream ? upstream.cancel() : response.body?.cancel?.());
+        };
+        const onAbort = () => { void cancel().catch(() => {}); };
+        const body = response.body && {
+          getReader() {
+            upstream = response.body.getReader();
+            return { read: () => abortable(signal, () => upstream.read()), cancel };
+          },
+          cancel,
+        };
+        if (body) {
+          signal.addEventListener('abort', onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        }
+        return { type: response.type, status: response.status, headers: response.headers,
+          url: response.url, redirected: response.redirected, body };
+      };
       let response;
       if (request.pypi !== undefined) {
         const opened = await pypi.open(request, task.controller, fetchRemote);
@@ -97,6 +168,8 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
       }
       check(slot, task);
       if (response.type === 'opaque' || response.status === 0) throw new Error('opaque response is unsupported');
+      if (response.redirected || (response.status >= 300 && response.status < 400 && response.status !== 304))
+        throw failure('blocked', 'redirect responses are unsupported');
       // Fetch decodes Content-Encoding before exposing bytes. Those wire headers
       // no longer describe this stream and must not reach the loopback adapter.
       const responseHeaders = [...response.headers].filter(([name]) =>
@@ -155,6 +228,7 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
       if (reader) { try { void reader.cancel().catch(() => {}); } catch (_) {} }
       if (slot.current === task) slot.current = null;
       stats.active--;
+      retire();
     }
   }
   function poll() {
@@ -180,27 +254,52 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
   return {
     start() {
       if (running) return;
-      mkdir(root); mkdir(`${root}/bin`);
-      write(`${root}/config.json`, JSON.stringify({ protocol: 1, generation,
-        slots: limits.slots, chunkBytes: limits.chunkBytes, maxTimeoutMs: limits.maxTimeoutMs,
-        pypiMetadata: 1 }));
-      for (const [name, source] of Object.entries(scripts)) write(`${root}/${name}`, source);
-      for (const [command, script] of [['kfetch', 'kfetch.py'], ['kpip-fast', 'kpip_fast.py']]) {
-        write(`${root}/bin/${command}`, `#!/bin/sh\nexec python3 ${root}/${script} "$@"\n`);
-        FS.chmod(`${root}/bin/${command}`, 0o755);
-      }
-      for (const slot of slots) {
-        mkdir(slot.path);
-        for (const name of ['request', 'request-ready', 'ready', 'chunk', 'ack', 'cancel']) write(`${slot.path}/${name}`, '');
-      }
-      running = true; poll();
-      sweepTimer = setInterval(() => pypi.sweep(), 30000);
+      if (stats.active) throw new Error('bridge is draining; retry start after active requests finish');
+      mkdir(root);
+      const stat = FS.stat(root);
+      if (!Number.isSafeInteger(stat.dev) || !Number.isSafeInteger(stat.ino))
+        throw new Error('bridge filesystem must expose stable device and inode identities');
+      rootIdentity = `${stat.dev}:${stat.ino}`;
+      if (registry.has(rootIdentity) && registry.get(rootIdentity) !== owner)
+        throw new Error('bridge root already has an owner');
+      registry.set(rootIdentity, owner);
+      try {
+        mkdir(`${root}/bin`);
+        // Even caller-supplied generation hints get a fresh, unguessable identity.
+        // Retired descriptors and delayed clients can never address the next run.
+        generation = `${generationPrefix}_${globalThis.crypto.randomUUID()}`;
+        directory = `${root}/${generation}`;
+        mkdir(directory);
+        slots = Array.from({ length: limits.slots }, (_, index) => ({
+          path: `${directory}/${index}`, seen: '', current: null,
+        }));
+        pypi = createPyPIProcessor(pypiOptions);
+        for (const [name, source] of Object.entries(scripts)) write(`${root}/${name}`, source);
+        for (const [command, script] of [['kfetch', 'kfetch.py'], ['kpip-fast', 'kpip_fast.py']]) {
+          write(`${root}/bin/${command}`, `#!/bin/sh\nexec python3 '${root.replaceAll("'", "'\\''")}/${script}' "$@"\n`);
+          FS.chmod(`${root}/bin/${command}`, 0o755);
+        }
+        for (const slot of slots) {
+          mkdir(slot.path);
+          for (const name of ['request', 'request-ready', 'ready', 'chunk', 'ack', 'cancel']) write(`${slot.path}/${name}`, '');
+        }
+        // Publish configuration last, after every mailbox is ready.
+        write(`${root}/config.json`, JSON.stringify({ protocol: 2, available: true, generation,
+          slots: limits.slots, chunkBytes: limits.chunkBytes, maxTimeoutMs: limits.maxTimeoutMs,
+          pypiMetadata: 1 }));
+        running = true; poll();
+        sweepTimer = setInterval(() => pypi.sweep(), 30000);
+      } catch (error) { running = false; retire(); throw error; }
     },
     stop() {
+      if (!running) return;
       running = false; clearTimeout(timer); clearInterval(sweepTimer);
+      // Keep version/generation visible while making new guest calls fail fast.
+      try { write(`${root}/config.json`, JSON.stringify({ protocol: 2, available: false, generation })); } catch (_) {}
       for (const slot of slots) slot.current?.controller.abort();
       pypi.stop();
+      retire();
     },
-    get status() { return { available: running, protocol: 1, ...stats, pypi: pypi.status }; },
+    get status() { return { available: running, protocol: 2, ...stats, pypi: pypi.status }; },
   };
 }
