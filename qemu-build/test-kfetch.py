@@ -19,6 +19,7 @@ CLIENT = Path(os.environ.get('KFETCH_TEST_CLIENT', Path(__file__).parent / 'gues
 SPEC = importlib.util.spec_from_file_location('kfetch_test_client', CLIENT)
 bridge = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(bridge)
+PROTOCOL = int(os.environ.get('KFETCH_TEST_PROTOCOL', '2'))
 URL = 'https://files.pythonhosted.org/packages/test.whl'
 
 
@@ -33,6 +34,7 @@ class ObservedFile:
         self.close_error = False
         self.before_close = None
         self.read_gate = None
+        self.after_read = None
 
     @property
     def closed(self):
@@ -52,7 +54,11 @@ class ObservedFile:
             return None
         if self.read_error:
             raise self.read_error
-        return self.stream.read(min(size, self.fixture.read_size or size))
+        data = self.stream.read(min(size, self.fixture.read_size or size))
+        if self.after_read:
+            hook, self.after_read = self.after_read, None
+            hook(data)
+        return data
 
     def write(self, data):
         self.write_calls += 1
@@ -105,7 +111,7 @@ class Mailbox:
 
         def observed_open(path, mode='r', buffering=-1, *args, **kwargs):
             name = path.name
-            watched = path.parent.parent == self.root and (
+            watched = path.parent.parent == self.slot_root and (
                 (name in ('ready', 'chunk') and mode == 'rb') or (name == 'ack' and mode == 'wb'))
             if watched and self.open_error == name:
                 raise OSError('injected open failure')
@@ -142,22 +148,24 @@ class Mailbox:
         self.generation = generation
         self.generations.append(generation)
         self.tasks.clear()
+        self.slot_root = self.root / generation if PROTOCOL == 2 else self.root
+        self.slot_root.mkdir(exist_ok=True)
         self.write(self.root / 'config.json', json.dumps({
-            'protocol': 1, 'generation': generation, 'slots': self.slots,
+            'protocol': PROTOCOL, 'available': True, 'generation': generation, 'slots': self.slots,
             'chunkBytes': self.chunk_bytes, 'pypiMetadata': 1}))
         for index in range(self.slots):
-            slot = self.root / str(index)
+            slot = self.slot_root / str(index)
             slot.mkdir(exist_ok=True)
             for name in ('ready', 'chunk', 'ack', 'request', 'request-ready', 'cancel'):
                 path = slot / name
                 if replace:
-                    path.unlink()
+                    path.unlink(missing_ok=True)
                 self.write(path, '')
 
     def pump(self):
         with self.pump_lock:
             for index in range(self.slots):
-                slot = self.root / str(index)
+                slot = self.slot_root / str(index)
                 token = self.text(slot / 'request-ready')
                 if not token:
                     continue
@@ -269,11 +277,16 @@ class ResponseTests(unittest.TestCase):
         successor = mailbox.fetch()
         before = {name: mailbox.text(successor.slot / name) for name in ('ack', 'cancel', 'request-ready')}
         opened = len(mailbox.handles)
-        with self.assertRaisesRegex(bridge.BridgeError, 'closed') as raised:
+        error = None
+        try:
             next(iterator)
-        self.assertEqual(raised.exception.code, 'cancelled')
-        self.assertEqual(len(mailbox.handles), opened)
+        except bridge.BridgeError as caught:
+            error = caught
         self.assertEqual({name: mailbox.text(successor.slot / name) for name in before}, before)
+        self.assertEqual(len(mailbox.handles), opened)
+        self.assertIsNotNone(error)
+        self.assertIn('closed', str(error))
+        self.assertEqual(error.code, 'cancelled')
         self.assertEqual(list(successor.iter_chunks()), [b'payload'])
 
     def test_close_before_iteration_and_generator_close_release_resources(self):
@@ -419,7 +432,7 @@ class ResponseTests(unittest.TestCase):
 
     def test_ready_read_limit_remains_bounded(self):
         mailbox = Mailbox(self)
-        mailbox.write(mailbox.root / '0' / 'ready', b'x' * 20000)
+        mailbox.write(mailbox.slot_root / '0' / 'ready', b'x' * 20000)
         response = bridge.Response.__new__(bridge.Response)
         with self.assertRaisesRegex(bridge.BridgeError, 'size limit'):
             response.__init__(URL)
@@ -562,6 +575,123 @@ class ResponseTests(unittest.TestCase):
         mailbox.assert_released(response)
         with self.assertRaisesRegex(bridge.BridgeError, 'closed'):
             next(iterator)
+
+
+    def test_generation_reset_after_ready_never_returns_successor_bytes(self):
+        mailbox = Mailbox(self, slots=1)
+        mailbox.payloads[URL] = [b'FIRST']
+        first = mailbox.fetch()
+        mailbox.pump()
+        successors = []
+        def reset_after_ready(data):
+            self.assertEqual(json.loads(data)['kind'], 'chunk')
+            mailbox.reset(uuid.uuid4().hex)
+            mailbox.payloads[URL + '/next'] = [b'SECND']
+            successor = mailbox.fetch(URL + '/next')
+            successors.append(successor)
+            mailbox.pump()
+        mailbox.handle('ready').after_read = reset_after_ready
+        iterator = first.iter_chunks()
+        self.assertEqual(next(iterator), b'FIRST', 'retired readers must never return successor bytes')
+        successor = successors[0]
+        before = {name: mailbox.text(successor.slot / name) for name in ('ack', 'cancel', 'request-ready')}
+        first.close()
+        iterator.close()
+        self.assertEqual({name: mailbox.text(successor.slot / name) for name in before}, before)
+        self.assertEqual(list(successor.iter_chunks()), [b'SECND'])
+        mailbox.assert_released(first)
+        mailbox.assert_released(successor)
+
+    def test_expired_consumer_releases_without_acknowledging_chunk(self):
+        mailbox = Mailbox(self)
+        response = mailbox.fetch()
+        iterator = response.iter_chunks()
+        self.assertEqual(next(iterator), b'payload')
+        response.deadline = 0
+        with self.assertRaises(bridge.BridgeError) as raised:
+            next(iterator)
+        self.assertEqual(raised.exception.code, 'timeout')
+        self.assertEqual(mailbox.text(response.slot / 'ack'), response.token + ':0')
+        mailbox.assert_released(response)
+
+    def test_expired_response_before_first_iteration_releases_handles(self):
+        mailbox = Mailbox(self)
+        response = mailbox.fetch()
+        response.deadline = 0
+        with self.assertRaises(bridge.BridgeError) as raised:
+            next(response.iter_chunks())
+        self.assertEqual(raised.exception.code, 'timeout')
+        mailbox.assert_released(response)
+
+    def test_competing_iterator_rejected_without_closing_owner(self):
+        mailbox = Mailbox(self)
+        response = mailbox.fetch()
+        first = response.iter_chunks()
+        self.assertEqual(next(first), b'payload')
+        with self.assertRaisesRegex(bridge.BridgeError, 'active iterator'):
+            next(response.iter_chunks())
+        self.assertFalse(response.closed)
+        self.assertEqual(mailbox.text(response.slot / 'ack'), response.token + ':0')
+        self.assertEqual(list(first), [])
+        mailbox.assert_released(response)
+
+    def test_invalid_config_shapes_fail_as_bridge_errors(self):
+        mailbox = Mailbox(self)
+        original = json.loads(mailbox.text(mailbox.root / 'config.json'))
+        cases = [[], None, {}, {**original, 'protocol': 1},
+                 {**original, 'slots': True}, {**original, 'slots': '4'},
+                 {**original, 'generation': '../escape'}, {**original, 'generation': ''},
+                 {**original, 'chunkBytes': True}, {**original, 'chunkBytes': None}]
+        for config in cases:
+            with self.subTest(config=config):
+                mailbox.write(mailbox.root / 'config.json', json.dumps(config))
+                with self.assertRaises(bridge.BridgeError):
+                    bridge.fetch(URL)
+
+    def test_invalid_frame_shapes_fail_as_bridge_errors(self):
+        mailbox = Mailbox(self)
+        for fields in ([], None, {'seq': True}, {'seq': '1'}):
+            mailbox.write(mailbox.slot_root / '0' / 'ready', '')
+            response = mailbox.fetch()
+            mailbox.write(response.slot / 'ready', json.dumps(fields))
+            with self.assertRaises(bridge.BridgeError):
+                list(response.iter_chunks())
+            mailbox.assert_released(response)
+
+
+    def test_timeout_domain_including_large_integers_is_rejected(self):
+        for timeout in (float('nan'), float('inf'), -1, 0, 601, True, '1', [], 10**1000):
+            with self.subTest(timeout_type=type(timeout).__name__):
+                with self.assertRaises(bridge.BridgeError):
+                    bridge.fetch(URL, timeout=timeout)
+
+    def test_deep_config_and_frame_json_fail_without_recursion_errors(self):
+        mailbox = Mailbox(self)
+        nested = '[' * 8000 + '0' + ']' * 8000
+        response = mailbox.fetch()
+        mailbox.write(response.slot / 'ready', nested)
+        with self.assertRaises(bridge.BridgeError):
+            next(response.iter_chunks())
+        mailbox.assert_released(response)
+        mailbox.write(mailbox.root / 'config.json', nested)
+        with self.assertRaises(bridge.BridgeError):
+            bridge.fetch(URL)
+
+
+    def test_retired_generation_close_cannot_mutate_successor_mailbox(self):
+        mailbox = Mailbox(self, slots=1)
+        first = mailbox.fetch()
+        iterator = first.iter_chunks()
+        self.assertEqual(next(iterator), b'payload')
+        mailbox.reset(uuid.uuid4().hex)
+        successor = mailbox.fetch()
+        before = {name: mailbox.text(successor.slot / name) for name in ('ack', 'cancel', 'request-ready')}
+        first.close()
+        iterator.close()
+        self.assertEqual({name: mailbox.text(successor.slot / name) for name in before}, before)
+        self.assertEqual(list(successor.iter_chunks()), [b'payload'])
+        mailbox.assert_released(first)
+        mailbox.assert_released(successor)
 
 
 if __name__ == '__main__':

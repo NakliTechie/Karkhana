@@ -56,6 +56,7 @@ qemu-build/*
 !qemu-build/profile-pypi-metadata.mjs
 !qemu-build/benchmark-metadata-2026-09-29.json
 !qemu-build/benchmark-transport-2026-09-29.json
+!qemu-build/hardening-transport-2026-09-29.json
 !qemu-build/fixtures/
 qemu-build/fixtures/*
 !qemu-build/fixtures/pypi-project.mjs
