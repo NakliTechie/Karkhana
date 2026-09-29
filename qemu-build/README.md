@@ -156,8 +156,13 @@ allow useful processing while retaining explicit failure for stalled requests.
 Limits: source builds, private indexes, requirement files, direct URL/VCS
 dependencies, npm, and arbitrary origins are unsupported. CORS still applies.
 The guest still spends CPU on Python, loopback HTTP, 9p, decompression, and
-installation. Throughput requires a browser measurement; this architecture
-alone does not establish a speedup.
+installation.
+
+On September 29, paired downloads used fresh query strings for the same
+18,252,005-byte NumPy wheel. Direct transfers took 15.98 and 16.14 guest
+seconds; legacy curl took 15.61 and 15.51. All four downloads matched SHA-256
+`666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5`.
+These samples demonstrate no speedup.
 
 Host checks require Node and Python, without an engine rebuild:
 
