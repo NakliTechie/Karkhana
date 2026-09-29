@@ -319,7 +319,7 @@
   },
   "limitations": [
     "Local installation is one sample; no new speedup claim.",
-    "CPU source tests require an unavailable QEMU_SOURCE_DIR; they did not execute in this run. The engine is unchanged.",
+    "The CPU source test failed its QEMU_SOURCE_DIR prerequisite; source validation did not run. The engine is unchanged.",
     "Host Python 3.12 accepts the deeply nested JSON fixture. This host control proves shape validation, not the RecursionError conversion branch.",
     "Initial asynchronous-FS independent harness attempts were invalid and excluded.",
     "Original foreign-origin negative selector matched zero tests; the corrected selector failed as required.",
