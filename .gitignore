@@ -59,6 +59,7 @@ qemu-build/*
 qemu-build/fixtures/*
 !qemu-build/fixtures/pypi-project.mjs
 !qemu-build/test-kpip-fast.py
+!qemu-build/test-kfetch.py
 !qemu-build/test-kpip-cache.py
 !qemu-build/karkhana-sw.js
 !qemu-build/guest/

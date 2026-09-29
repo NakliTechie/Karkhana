@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import uuid
 
@@ -42,6 +43,12 @@ class Response:
         self.closed = False
         self.finished = False
         self.seq = 0
+        # Descriptors belong to this transfer, never to the module or slot.
+        self._io_lock = threading.RLock()
+        self._handles = contextlib.ExitStack()
+        self._readers = {}
+        self._ack_stream = None
+        self._ack_length = 0
         self.root = Path(os.environ.get('KARKHANA_FETCH_ROOT', '/persist/.karkhana-net'))
         try:
             config = json.loads(_read(self.root / 'config.json', 16384))
@@ -73,13 +80,17 @@ class Response:
                     except BlockingIOError:
                         lock.close()
                         continue
+                    except BaseException:
+                        with contextlib.suppress(OSError):
+                            lock.close()
+                        raise
                     self.lock = lock
                     self.slot = self.root / str(index)
                     break
                 if self.lock is None:
                     self._pause()
             _write(self.slot / 'cancel', '')
-            _write(self.slot / 'ack', '')
+            self._write_ack('')
             _write(self.slot / 'request', request)
             _write(self.slot / 'request-ready', self.token)
             frame = self._frame()
@@ -90,8 +101,55 @@ class Response:
             self.url = frame['url']
             self._ack()
         except BaseException:
-            self.close()
+            with contextlib.suppress(OSError):
+                self.close()
             raise
+
+    def _ensure_open(self):
+        if self.closed:
+            raise BridgeError('response is closed', 'cancelled')
+
+    def _read_mailbox(self, name, limit):
+        with self._io_lock:
+            self._ensure_open()
+            stream = self._readers.get(name)
+            if stream is None:
+                # Buffered readers can return bytes from an earlier publication.
+                stream = self._handles.enter_context((self.slot / name).open('rb', buffering=0))
+                self._readers[name] = stream
+            stream.seek(0)
+            parts = []
+            remaining = limit + 1
+            while remaining:
+                part = stream.read(remaining)
+                if part is None:
+                    raise OSError('incomplete bridge read')
+                if not part:
+                    break
+                parts.append(part)
+                remaining -= len(part)
+            data = b''.join(parts)
+            if len(data) > limit:
+                raise BridgeError('bridge file exceeds size limit')
+            return data
+
+    def _write_ack(self, value):
+        with self._io_lock:
+            self._ensure_open()
+            data = value.encode()
+            if self._ack_stream is None:
+                self._ack_stream = self._handles.enter_context((self.slot / 'ack').open('wb', buffering=0))
+            stream = self._ack_stream
+            stream.seek(0)
+            offset = 0
+            while offset < len(data):
+                written = stream.write(data[offset:])
+                if not written:
+                    raise OSError('incomplete bridge acknowledgement write')
+                offset += written
+            if len(data) < self._ack_length:
+                stream.truncate(len(data))
+            self._ack_length = len(data)
 
     def _pause(self):
         if time.monotonic() >= self.deadline:
@@ -101,7 +159,7 @@ class Response:
     def _frame(self):
         while True:
             try:
-                frame = json.loads(_read(self.slot / 'ready', 16384))
+                frame = json.loads(self._read_mailbox('ready', 16384))
             except (ValueError, OSError):
                 self._pause()
                 continue
@@ -112,40 +170,53 @@ class Response:
             self._pause()
 
     def _ack(self):
-        _write(self.slot / 'ack', f'{self.token}:{self.seq}')
-        self.seq += 1
+        with self._io_lock:
+            self._write_ack(f'{self.token}:{self.seq}')
+            self.seq += 1
 
     def iter_chunks(self):
         try:
             while not self.finished:
                 frame = self._frame()
                 if frame['kind'] == 'done':
-                    self.finished = True
-                    self._ack()
+                    with self._io_lock:
+                        self._ack()
+                        self.finished = True
+                        self.close()
                     return
                 if frame['kind'] != 'chunk' or not 0 < frame.get('size', 0) <= self.chunk_bytes:
                     raise BridgeError('invalid response frame')
-                chunk = _read(self.slot / 'chunk', self.chunk_bytes)
+                chunk = self._read_mailbox('chunk', self.chunk_bytes)
                 if len(chunk) != frame['size']:
                     raise BridgeError('truncated response chunk')
                 # Yield before ACK: a slow consumer cannot accumulate new chunks.
                 yield chunk
                 self._ack()
         except BaseException:
-            self.close()
+            with contextlib.suppress(OSError):
+                self.close()
             raise
 
     def close(self):
-        if self.closed:
-            return
-        self.closed = True
-        if self.slot is not None:
-            if not self.finished:
-                with contextlib.suppress(OSError):
-                    _write(self.slot / 'cancel', self.token)
-        if self.lock is not None:
-            self.lock.close()
-            self.lock = None
+        # Close all descriptors before releasing the slot. A suspended iterator
+        # must never reopen a file or ACK after another response owns the slot.
+        with self._io_lock:
+            if self.closed:
+                return
+            self.closed = True
+            try:
+                if self.slot is not None and not self.finished:
+                    with contextlib.suppress(OSError):
+                        _write(self.slot / 'cancel', self.token)
+            finally:
+                self._readers.clear()
+                self._ack_stream = None
+                try:
+                    self._handles.close()
+                finally:
+                    if self.lock is not None:
+                        lock, self.lock = self.lock, None
+                        lock.close()
 
     def __enter__(self):
         return self
