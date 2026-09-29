@@ -202,6 +202,22 @@ These samples do not establish a general speed distribution.
 The [measurement record](benchmark-metadata-2026-09-29.json) includes engine
 hashes, asset hashes, package versions, phase timings, and limitations.
 
+A subsequent handle-reuse comparison kept the engine unchanged. Two paired
+18,252,005-byte fixture copies took 8.099/9.006 host seconds before reuse and
+3.005/3.681 after reuse. Remote `kfetch` CLI samples took 16.342/16.531 seconds
+before reuse and 11.952/12.279 afterward. All 22 guest payload checks matched
+the pinned wheel's byte count and SHA-256. Two browser downloads also matched.
+
+One fresh `aider-chat==0.86.2` install per implementation took 328.009 host
+seconds before reuse and 311.006 afterward, a 5.18% reduction. Both inventories
+contained the same 112 distributions. The command installed 108 packages;
+uv checked 109 packages. Guest resolution took 121 versus 103 seconds,
+preparation took 140 versus 139, and installation took 12.83 versus 12.66.
+These samples do not establish a general speed distribution. This comparison
+includes no legacy-path timing. The [transport measurement record](benchmark-transport-2026-09-29.json)
+preserves sample timings, source hashes, fixture identity, validation counts,
+and limitations.
+
 Host checks require Node and Python, without an engine rebuild:
 
 ```bash
@@ -209,6 +225,7 @@ node qemu-build/test-browser-fetch.mjs
 node qemu-build/test-pypi-metadata.mjs
 python3 qemu-build/test-kpip-fast.py
 python3 qemu-build/test-kpip-cache.py
+python3 qemu-build/test-kfetch.py
 node qemu-build/test-pty.mjs
 ```
 
