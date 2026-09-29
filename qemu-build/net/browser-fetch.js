@@ -1,6 +1,7 @@
 // Direct HTTP downloads over the existing 9p mount. No guest external TCP/TLS.
 // The guest owns request/ack/cancel files; the browser owns ready/chunk files.
 // Publish bytes first, then a generation + request + sequence commit marker.
+import { createPyPIProcessor } from './pypi-metadata.js';
 export const FETCH_LIMITS = Object.freeze({ slots: 4, chunkBytes: 256 * 1024,
   requestBytes: 16384, responseHeaderBytes: 16384, readBytes: 16 * 1024 * 1024,
   maxTimeoutMs: 600000, pollMs: 20 });
@@ -13,8 +14,9 @@ const failure = (code, message) => Object.assign(new Error(message), { code });
 
 export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
   fetchImpl = globalThis.fetch, generation = globalThis.crypto.randomUUID(),
-  scripts = {}, limits = FETCH_LIMITS } = {}) {
-  let running = false, timer;
+  scripts = {}, limits = FETCH_LIMITS, pypiOptions = {} } = {}) {
+  let running = false, timer, sweepTimer;
+  const pypi = createPyPIProcessor(pypiOptions);
   const slots = Array.from({ length: limits.slots }, (_, index) => ({
     path: `${root}/${index}`, seen: '', current: null,
   }));
@@ -43,7 +45,8 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
       throw new Error('request identity mismatch');
     if (typeof request.url !== 'string' || request.url.length > 8192) throw new Error('invalid URL');
     const url = new URL(request.url);
-    if (url.username || url.password || !ORIGINS.has(url.origin))
+    const authority = request.url.match(/^[a-z][a-z0-9+.-]*:\/\/([^/]*)/i)?.[1];
+    if (url.username || url.password || authority?.includes('@') || !ORIGINS.has(url.origin))
       throw failure('blocked', 'only HTTPS pypi.org and files.pythonhosted.org downloads are supported');
     if (!['GET', 'HEAD'].includes(request.method)) throw failure('blocked', 'only GET and HEAD are supported');
     if (!Array.isArray(request.headers) || request.headers.length > 16) throw new Error('invalid headers');
@@ -75,16 +78,23 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
     }
   }
   async function serve(slot, task) {
-    let timeout, reader;
+    let timeout, reader, release;
     stats.requests++; stats.active++;
     try {
       const request = JSON.parse(text(`${slot.path}/request`, limits.requestBytes));
       const { url, headers } = validate(request, task);
       timeout = setTimeout(() => { task.reason = 'request timed out'; task.controller.abort(); }, request.timeoutMs);
       check(slot, task);
-      const response = await fetchImpl(url.href, { method: request.method, headers,
+      const fetchRemote = (href, options) => fetchImpl(href, {
         credentials: 'omit', referrerPolicy: 'no-referrer', mode: 'cors', redirect: 'error',
-        cache: 'no-store', signal: task.controller.signal });
+        cache: 'no-store', ...options });
+      let response;
+      if (request.pypi !== undefined) {
+        const opened = await pypi.open(request, task.controller, fetchRemote);
+        response = opened.response; release = opened.release;
+      } else {
+        response = await fetchRemote(url.href, { method: request.method, headers, signal: task.controller.signal });
+      }
       check(slot, task);
       if (response.type === 'opaque' || response.status === 0) throw new Error('opaque response is unsupported');
       // Fetch decodes Content-Encoding before exposing bytes. Those wire headers
@@ -141,6 +151,7 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
     } finally {
       clearTimeout(timeout);
       task.controller.abort();
+      release?.();
       if (reader) { try { void reader.cancel().catch(() => {}); } catch (_) {} }
       if (slot.current === task) slot.current = null;
       stats.active--;
@@ -171,7 +182,8 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
       if (running) return;
       mkdir(root); mkdir(`${root}/bin`);
       write(`${root}/config.json`, JSON.stringify({ protocol: 1, generation,
-        slots: limits.slots, chunkBytes: limits.chunkBytes, maxTimeoutMs: limits.maxTimeoutMs }));
+        slots: limits.slots, chunkBytes: limits.chunkBytes, maxTimeoutMs: limits.maxTimeoutMs,
+        pypiMetadata: 1 }));
       for (const [name, source] of Object.entries(scripts)) write(`${root}/${name}`, source);
       for (const [command, script] of [['kfetch', 'kfetch.py'], ['kpip-fast', 'kpip_fast.py']]) {
         write(`${root}/bin/${command}`, `#!/bin/sh\nexec python3 ${root}/${script} "$@"\n`);
@@ -182,11 +194,13 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
         for (const name of ['request', 'request-ready', 'ready', 'chunk', 'ack', 'cancel']) write(`${slot.path}/${name}`, '');
       }
       running = true; poll();
+      sweepTimer = setInterval(() => pypi.sweep(), 30000);
     },
     stop() {
-      running = false; clearTimeout(timer);
+      running = false; clearTimeout(timer); clearInterval(sweepTimer);
       for (const slot of slots) slot.current?.controller.abort();
+      pypi.stop();
     },
-    get status() { return { available: running, protocol: 1, ...stats }; },
+    get status() { return { available: running, protocol: 1, ...stats, pypi: pypi.status }; },
   };
 }

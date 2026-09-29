@@ -21,6 +21,7 @@
 !out.js
 !arg-module.js
 !browser-fetch.js
+!pypi-metadata.js
 !kfetch.py
 !kpip_fast.py
 !c2w-net-proxy.wasm.gzip
@@ -50,6 +51,11 @@ qemu-build/*
 !qemu-build/serve.py
 !qemu-build/test-pty.mjs
 !qemu-build/test-browser-fetch.mjs
+!qemu-build/test-pypi-metadata.mjs
+!qemu-build/profile-pypi-metadata.mjs
+!qemu-build/fixtures/
+qemu-build/fixtures/*
+!qemu-build/fixtures/pypi-project.mjs
 !qemu-build/test-kpip-fast.py
 !qemu-build/test-kpip-cache.py
 !qemu-build/karkhana-sw.js
@@ -73,6 +79,7 @@ qemu-build/net/c2w-net-proxy/*
 !qemu-build/net/c2w-net-proxy/README.md
 !qemu-build/net/stack/
 !qemu-build/net/browser-fetch.js
+!qemu-build/net/pypi-metadata.js
 qemu-build/net/stack/*
 !qemu-build/net/stack/stack.js
 !qemu-build/net/stack/stack-worker.js

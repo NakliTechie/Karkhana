@@ -7,10 +7,12 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { syntheticProject } from './fixtures/pypi-project.mjs';
 
 const sourcePath = new URL('./net/browser-fetch.js', import.meta.url);
 const clientPath = new URL('./guest/kfetch.py', import.meta.url).pathname;
-const source = readFileSync(sourcePath);
+const metadataURL = 'data:text/javascript;base64,' + readFileSync(new URL('./net/pypi-metadata.js', import.meta.url)).toString('base64');
+const source = Buffer.from(readFileSync(sourcePath, 'utf8').replace("'./pypi-metadata.js'", JSON.stringify(metadataURL)));
 const { createBrowserFetchBridge, FETCH_LIMITS } = await import(`data:text/javascript;base64,${source.toString('base64')}`);
 const generation = '6a8d81c1-b0bd-4d42-b0bc-f52168f114a6';
 const id = 'a'.repeat(32), token = `${generation}:${id}`;
@@ -255,7 +257,8 @@ test('disallowed origins, userinfo, methods and credential headers never call fe
   const f = fixture(t, async () => { calls++; return new Response('no'); });
   const cases = [{ url: 'http://pypi.org/simple/' }, { url: 'https://127.0.0.1/' },
     { url: 'https://api.karkhana.internal/v1/' }, { url: 'https://pypi.org.evil.example/' },
-    { url: 'https://user:pass@pypi.org/simple/' }, { method: 'POST' }, { headers: [['Authorization', 'secret']] }];
+    { url: 'https://user:pass@pypi.org/simple/' }, { url: 'https://@pypi.org/simple/' },
+    { method: 'POST' }, { headers: [['Authorization', 'secret']] }];
   for (let i = 0; i < cases.length; i++) {
     const requestId = i.toString(16).padStart(32, '0');
     f.request(cases[i], requestId);
@@ -379,6 +382,7 @@ with IndexServer(PackageIndex(fetch)) as server:
     finally:
         server.shutdown()
         thread.join()
+        server.index.close(server.base_url)
 `;
   const result = await f.pythonRaw(['-c', script]);
   assert.equal(result.code, 0, result.stderr);
@@ -387,4 +391,50 @@ with IndexServer(PackageIndex(fetch)) as server:
   assert.equal(received.document.files[0].hashes.sha256, 'abc');
   assert.match(received.document.files[0].url, /#sha256=abc$/);
   assert.deepEqual(calls, ['https://pypi.org/simple/demo/', upstream]);
+  assert.equal(f.bridge.status.pypi.sessions, 0);
+  assert.equal(f.bridge.status.pypi.cacheBytes, 0);
+});
+
+test('large encoded projects cross multiple mailbox chunks and browser retries share cached bytes', async t => {
+  let requests = 0;
+  const f = fixture(t, async url => {
+    assert.equal(url, 'https://pypi.org/simple/metadata-fixture/');
+    requests++;
+    return Response.json(syntheticProject(600));
+  });
+  const script = `
+import sys, threading, http.client, json
+sys.path.insert(0, ${JSON.stringify(new URL('./guest/', import.meta.url).pathname)})
+from kpip_fast import PackageIndex, IndexServer
+from kfetch import fetch
+with IndexServer(PackageIndex(fetch)) as server:
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        replies = []
+        for _ in range(2):
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=10)
+            connection.request('GET', '/simple/metadata-fixture/', headers={'Accept': 'application/vnd.pypi.simple.v1+json'})
+            response = connection.getresponse()
+            assert response.status == 200, response.read()
+            assert response.getheader('Transfer-Encoding') == 'chunked'
+            replies.append(response.read())
+            connection.close()
+        assert replies[0] == replies[1]
+        document = json.loads(replies[0])
+        assert len(document['files']) == 600
+        assert all(entry['url'].startswith(server.base_url + '/files/') for entry in document['files'])
+        print(len(replies[0]))
+    finally:
+        server.shutdown()
+        thread.join()
+        server.index.close(server.base_url)
+`;
+  const result = await f.pythonRaw(['-c', script]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(Number(result.stdout) > FETCH_LIMITS.chunkBytes);
+  assert.equal(requests, 1);
+  assert.equal(f.bridge.status.pypi.projects, 1);
+  assert.equal(f.bridge.status.pypi.cacheHits, 1);
+  assert.equal(f.bridge.status.pypi.sessions, 0);
 });

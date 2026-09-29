@@ -34,7 +34,9 @@ The guest gets a real NIC, not a shimmed `fetch`. Two modes, auto-selected at bo
 
 `kpip-fast` adds an opt-in path for public PyPI wheels. It sends requests over
 the existing 9p mount to browser `fetch()`. Downloads avoid guest external TCP
-and TLS. A guest loopback adapter supplies uv's index and wheel responses.
+and TLS. The browser parses, validates, and rewrites project metadata.
+A guest loopback adapter streams encoded index responses and wheel bytes to uv.
+The guest does not parse or serialize project JSON.
 
 ```bash
 kpip-fast 'httpx[http2]>=0.27,<1'
@@ -45,7 +47,9 @@ kfetch -f https://pypi.org/simple/rich/ -o rich-index.html
 This path preserves package hashes and streams binary responses with
 backpressure. It supports named requirements, extras, version constraints, and
 environment markers. It accepts only public HTTPS PyPI and pythonhosted
-downloads. Browser CORS rules still apply.
+downloads. Each install has separate browser authorization bound to its loopback
+origin. The browser only serves wheel routes advertised within that session.
+Browser CORS rules still apply.
 
 Source builds, private indexes, requirement files, URL/VCS dependencies, npm,
 and general networking use the existing tools. `kpip-fast` rejects unsupported

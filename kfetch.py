@@ -33,7 +33,7 @@ def _write(path, value):
 
 class Response:
     """One slot stays locked until EOF or close; consumers provide backpressure."""
-    def __init__(self, url, headers=None, method='GET', timeout=120):
+    def __init__(self, url, headers=None, method='GET', timeout=120, pypi=None):
         if not 1 <= timeout <= 600:
             raise BridgeError('timeout must be between 1 and 600 seconds')
         self.deadline = time.monotonic() + timeout
@@ -47,6 +47,8 @@ class Response:
             config = json.loads(_read(self.root / 'config.json', 16384))
             if config.get('protocol') != 1 or not 1 <= config['slots'] <= 4:
                 raise BridgeError('unsupported bridge configuration')
+            if pypi is not None and config.get('pypiMetadata') != 1:
+                raise BridgeError('browser PyPI metadata processing is unavailable; reload Karkhana')
             self.generation = config['generation']
             self.chunk_bytes = config['chunkBytes']
             if not isinstance(self.generation, str) or len(self.generation) > 64 or not 1 <= self.chunk_bytes <= 262144:
@@ -54,9 +56,12 @@ class Response:
             self.id = uuid.uuid4().hex
             self.token = f'{self.generation}:{self.id}'
             header_pairs = headers.items() if hasattr(headers, 'items') else (headers or [])
-            request = json.dumps({'protocol': 1, 'generation': self.generation,
+            payload = {'protocol': 1, 'generation': self.generation,
                 'id': self.id, 'url': url, 'method': method, 'headers': list(header_pairs),
-                'timeoutMs': int(timeout * 1000)})
+                'timeoutMs': int(timeout * 1000)}
+            if pypi is not None:
+                payload['pypi'] = pypi
+            request = json.dumps(payload)
             if len(request.encode()) > 16384:
                 raise BridgeError('request exceeds size limit')
             # Locks live on guest tmpfs. 9p advisory-lock support is unnecessary.
@@ -149,8 +154,8 @@ class Response:
         self.close()
 
 
-def fetch(url, headers=None, method='GET', timeout=120):
-    return Response(url, headers=headers, method=method, timeout=timeout)
+def fetch(url, headers=None, method='GET', timeout=120, pypi=None):
+    return Response(url, headers=headers, method=method, timeout=timeout, pypi=pypi)
 
 
 def main(argv=None):
