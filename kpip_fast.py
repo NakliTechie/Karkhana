@@ -27,7 +27,9 @@ MAX_PROJECT_BYTES = 16 * 1024 * 1024
 MAX_ENCODED_METADATA_BYTES = 32 * 1024 * 1024
 MAX_METADATA_CACHE_BYTES = 16 * 1024 * 1024
 HTTP_TIMEOUT_SECONDS = 180
-MAX_REGISTERED_FILES = 100_000
+# Keep one URL and metadata permission per wheel. Storing sidecar routes and
+# URLs separately doubled both record count and most registry string storage.
+MAX_REGISTERED_WHEELS = 200_000
 CHUNK_BYTES = 64 * 1024
 NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
 PROJECT_RE = re.compile(rf"{NAME}\Z")
@@ -229,18 +231,21 @@ class PackageIndex:
             if advertised_filename != filename:
                 raise AdapterError(502, "Download filename does not match PyPI metadata")
             route = "/files" + path
-            additions[route] = clean_url
             metadata = entry.get("core-metadata", entry.get("dist-info-metadata", False))
-            if metadata:
-                additions[route + ".metadata"] = clean_url + ".metadata"
+            additions[route] = (clean_url, bool(metadata))
             rewritten = dict(entry)
             fragment = fragment or _hash_fragment(entry.get("hashes"))
             rewritten["url"] = base_url + route + ("#" + fragment if fragment else "")
             result["files"].append(rewritten)
         with self.lock:
-            if (len(self.files) + len(additions) > MAX_REGISTERED_FILES
-                    and len(self.files) + len(additions.keys() - self.files.keys()) > MAX_REGISTERED_FILES):
-                raise AdapterError(503, "Package metadata exceeds this session's file limit")
+            if (len(self.files) + len(additions) > MAX_REGISTERED_WHEELS
+                    and len(self.files) + len(additions.keys() - self.files.keys()) > MAX_REGISTERED_WHEELS):
+                raise AdapterError(503, "Package metadata exceeds this session's wheel limit")
+            # A prior advertised sidecar stays usable by a cached response in
+            # this session, matching the previous separate-route registry.
+            for route in self.files.keys() & additions.keys():
+                if self.files[route][1] and not additions[route][1]:
+                    additions[route] = (additions[route][0], True)
             self.files.update(additions)
         return result
 
@@ -272,11 +277,13 @@ class PackageIndex:
             raise AdapterError(502, "PyPI request failed with HTTP " + str(status))
 
     def file_url(self, path):
+        sidecar = path.endswith(".metadata")
+        route = path.removesuffix(".metadata") if sidecar else path
         with self.lock:
-            url = self.files.get(path)
-        if url is None:
+            record = self.files.get(route)
+        if record is None or (sidecar and not record[1]):
             raise AdapterError(403, "Download was not advertised by this session's PyPI index")
-        return url
+        return record[0] + ".metadata" if sidecar else record[0]
 
 
 def project_html(document):
