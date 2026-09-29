@@ -94,6 +94,7 @@
     <script type="module">
       import './arg-module.js';
       import initEmscriptenModule from './out.js';
+      import { createBrowserFetchBridge } from './browser-fetch.js';
 
       const stateEl = document.getElementById('vmstate');
       const overlay = document.getElementById('overlay');
@@ -339,6 +340,22 @@
           window.karkhana._persistRestored = !!opfsState;
           info += 'm: persist\n';
 
+          // An opt-in HTTP path uses the existing 9p mount, so the shipped VM
+          // gains kfetch/kpip-fast without rebuilding its kernel or snapshot.
+          // Failure to load these small assets leaves the existing NIC usable.
+          let directFetchScripts = null;
+          try {
+            const names = ['kfetch.py', 'kpip_fast.py'];
+            const sources = await Promise.all(names.map(async name => {
+              const response = await fetch('./' + name, { cache: 'no-cache' });
+              if (!response.ok) throw new Error(name + ': HTTP ' + response.status);
+              return response.text();
+            }));
+            directFetchScripts = Object.fromEntries(names.map((name, i) => [name, sources[i]]));
+            info += 'env: KARKHANA_FETCH_ROOT=/persist/.karkhana-net\n';
+            info += 'env: PATH=/persist/.karkhana-net/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n';
+          } catch (error) { console.warn('direct package downloads unavailable', error); }
+
           // auto-pull: when the guest's ksave bumps the nonce, mirror state.tar to OPFS
           let lastKsaveNonce = '0';
           setInterval(async () => {
@@ -370,6 +387,17 @@
           } else {
             window.karkhana.net = { mode: 'offline', cert: false };
           }
+          let directFetchBridge;
+          Object.defineProperty(window.karkhana.net, 'directFetch', {
+            enumerable: true, get: () => directFetchBridge?.status || { available: false },
+          });
+          if (directFetchScripts) Module['preRun'].push((mod) => {
+            directFetchBridge = createBrowserFetchBridge(mod.FS, { scripts: directFetchScripts });
+            directFetchBridge.start();
+          });
+          window.addEventListener('pagehide', event => {
+            if (!event.persisted) directFetchBridge?.stop();
+          });
           Module['preRun'].push((mod) => {
             try { mod.FS.mkdir('/pack'); } catch (e) {}
             mod.FS.writeFile('/pack/info', info);
