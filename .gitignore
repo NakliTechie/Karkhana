@@ -20,6 +20,9 @@
 !load.js
 !out.js
 !arg-module.js
+!browser-fetch.js
+!kfetch.py
+!kpip_fast.py
 !c2w-net-proxy.wasm.gzip
 !engine/
 !engine/**
@@ -46,10 +49,14 @@ qemu-build/*
 !qemu-build/karkhana.html
 !qemu-build/serve.py
 !qemu-build/test-pty.mjs
+!qemu-build/test-browser-fetch.mjs
+!qemu-build/test-kpip-fast.py
 !qemu-build/karkhana-sw.js
 !qemu-build/guest/
 qemu-build/guest/*
 !qemu-build/guest/agent.py
+!qemu-build/guest/kfetch.py
+!qemu-build/guest/kpip_fast.py
 !qemu-build/vendor/
 qemu-build/vendor/*
 !qemu-build/vendor/xterm.js
@@ -64,6 +71,7 @@ qemu-build/net/c2w-net-proxy/*
 !qemu-build/net/c2w-net-proxy/go.sum
 !qemu-build/net/c2w-net-proxy/README.md
 !qemu-build/net/stack/
+!qemu-build/net/browser-fetch.js
 qemu-build/net/stack/*
 !qemu-build/net/stack/stack.js
 !qemu-build/net/stack/stack-worker.js

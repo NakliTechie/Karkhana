@@ -102,6 +102,57 @@ Python 3.11 + uv (`kpip <pkg>` = tuned installer), Node 18, sqlite3, git, curl,
    egress via browser fetch(). CORS-bounded: PyPI/npm work (`kpip`, npm with
    `NODE_EXTRA_CA_CERTS=/.wasmenv/proxy.crt`); apt/git/GitHub-releases don't.
 
+### Direct PyPI downloads
+
+`kpip-fast PACKAGE` offers an opt-in package path over the existing `/persist`
+9p mount. It starts a temporary guest loopback index, then runs uv against it.
+The browser performs HTTPS requests for index metadata and wheel bytes.
+No external guest TCP or guest TLS participates in those downloads.
+
+The page stages `kfetch.py` and `kpip_fast.py` into `/persist/.karkhana-net`
+before boot. `/pack/info` adds their wrappers to the guest's PATH. Existing
+engine snapshots therefore need no rebuild. `build.sh`, `chunk.sh`, and
+`publish.sh` carry all three new assets on subsequent rebuilds.
+
+`net/browser-fetch.js` implements four preallocated mailbox slots. Each slot
+holds one request and one response chunk, capped at 256 KiB. A generation,
+request ID, and sequence number bind every publication and acknowledgement.
+The browser waits for an acknowledgement before advancing the stream.
+Cancellation and total timeouts abort browser requests. Truncated transfers
+produce errors, never a successful EOF. `kfetch -o FILE` replaces its output
+only after a complete response.
+
+The browser permits only `GET` and `HEAD` on exact HTTPS PyPI/pythonhosted
+origins. It omits cookies, referrers, and credentials. It rejects redirects,
+URL credentials, and unsupported headers. The BYOK hostname cannot enter this
+path. Fetch decodes HTTP content encoding; the adapter drops those wire
+headers and supplies its own chunked response framing.
+
+The adapter rewrites PyPI file URLs while preserving hashes, Python version
+requirements, yanked markers, and advertised wheel metadata. It offers only
+wheels. Installer config and proxy overrides cannot select another index.
+An explicit loopback proxy rejects external HTTP targets and HTTPS CONNECT.
+The existing `kpip`, npm, relay, and gvisor paths remain available.
+
+Limits: source builds, private indexes, requirement files, direct URL/VCS
+dependencies, npm, and arbitrary origins are unsupported. CORS still applies.
+The guest still spends CPU on Python, loopback HTTP, 9p, decompression, and
+installation. Throughput requires a browser measurement; this architecture
+alone does not establish a speedup.
+
+Host checks require Node and Python, without an engine rebuild:
+
+```bash
+node qemu-build/test-browser-fetch.mjs
+python3 qemu-build/test-kpip-fast.py
+node qemu-build/test-pty.mjs
+```
+
+The first suite includes the actual Python adapter and client against the JS
+bridge. A disposable browser run must additionally verify 9p visibility,
+runtime PATH, real CORS responses, a package install, and post-install liveness.
+Inspect `karkhana.net.directFetch` for transfer counters.
+
 ## Persistence
 
 `ksave` in the guest tars /usr/local + /root into /persist/state.tar; the page

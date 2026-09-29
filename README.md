@@ -32,6 +32,25 @@ The guest gets a real NIC, not a shimmed `fetch`. Two modes, auto-selected at bo
 - **In-page fetch stack (zero-install, what the hosted site uses).** [gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock) compiled to wasm, with egress through the browser's own `fetch()`. Bounded by CORS, so PyPI and npm work; `apt`, `git` and GitHub releases do not.
 - **Relay (development).** Run `net/c2w-net -listen-ws localhost:8888` on your machine and the page picks it up, giving the guest real TCP/IP — plain `pip`, `git`, `apt`, anything.
 
+`kpip-fast` adds an opt-in path for public PyPI wheels. It sends requests over
+the existing 9p mount to browser `fetch()`. Downloads avoid guest external TCP
+and TLS. A guest loopback adapter supplies uv's index and wheel responses.
+
+```bash
+kpip-fast 'httpx[http2]>=0.27,<1'
+kpip-fast --no-cache --reinstall rich
+kfetch -f https://pypi.org/simple/rich/ -o rich-index.html
+```
+
+This path preserves package hashes and streams binary responses with
+backpressure. It supports named requirements, extras, version constraints, and
+environment markers. It accepts only public HTTPS PyPI and pythonhosted
+downloads. Browser CORS rules still apply.
+
+Source builds, private indexes, requirement files, URL/VCS dependencies, npm,
+and general networking use the existing tools. `kpip-fast` rejects unsupported
+routes instead of falling back silently. The BYOK bridge remains separate.
+
 ## AI, and how the key stays out of the VM
 
 Two tiers, both optional — pull them out and the Linux box is unchanged.
@@ -52,6 +71,7 @@ karkhana.shell.onData(cb)              // subscribe to guest output
 karkhana.persist.pull()                // mirror saved state to OPFS now
 karkhana.persist.forget()              // drop saved state
 karkhana.net                           // { mode, cert } — which network path is live
+karkhana.net.directFetch               // availability, request/byte/error counters
 karkhana.ai.gp.ask(prompt)             // on-device tier
 ```
 
