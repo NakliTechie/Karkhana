@@ -1,0 +1,329 @@
+{
+  "date": "2026-09-29",
+  "scope": "Browser-fetch protocol 2 mailbox lifecycle hardening; pre-deployment acceptance evidence.",
+  "baseline": "f9db9ba03d2d3dc947fbc53554651dc70f3d4f7e",
+  "source_sha256": {
+    "browser-fetch.js": "d53a4205715eb7cf6296006a18edf60a0a5e769ce72db3ab82a3a7176b416e9b",
+    "kfetch.py": "1895edbee6d6e8b9db5b963a4cec19b4e31c985d833c82b6ecc7c6eb70f3c30e",
+    "pypi-metadata.js": "2d669c3c595d026c173888b7eee80bf1a05b6e607e313d0c9b2f6d451a39b833"
+  },
+  "regressions": {
+    "kfetch": 32,
+    "browser_fetch": 21,
+    "pypi_metadata": 17,
+    "loopback_adapter": 14,
+    "cache_forwarding": 5,
+    "pty": 11,
+    "total": 100,
+    "exit_code": 0
+  },
+  "independent": {
+    "models": [
+      "GPT-6 Sol",
+      "GPT-5.6 Sol",
+      "GPT-5.6 Terra"
+    ],
+    "constructive_v2": {
+      "probes": 5,
+      "exit_code": 0
+    },
+    "adversarial_v2": {
+      "probes": 13,
+      "exit_code": 0,
+      "new_findings": 0
+    },
+    "lifecycle_v2": {
+      "passed": true,
+      "exit_code": 0
+    }
+  },
+  "negative_controls": [
+    {
+      "name": "old-generation-bytes",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_generation_reset_after_ready_never_returns_successor_bytes",
+        "-v"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "old-generation-close",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_retired_generation_close_cannot_mutate_successor_mailbox",
+        "-v"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "old-deep-json",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_deep_config_and_frame_json_fail_without_recursion_errors",
+        "-v"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "old-huge-timeout",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_timeout_domain_including_large_integers_is_rejected",
+        "-v"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "old-session-release",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=cancelled PyPI wheel fetches",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "old-root-alias",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=equivalent root paths",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "old-root-symlink",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=symlinked root aliases",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "old-unopened-body",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=cancelling unacknowledged headers",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "old-redirect",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=redirect responses fail explicitly",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "no-deadline",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_expired_consumer_releases_without_acknowledging_chunk",
+        "-v"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "competing-iterators",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_competing_iterator_rejected_without_closing_owner",
+        "-v"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "closed-guard",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_closed_iterator_cannot_ack_or_cancel_successor",
+        "-v"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "no-eof-cleanup",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_reuses_three_unbuffered_handles_and_releases_at_eof",
+        "-v"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "protocol-downgrade",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_invalid_config_shapes_fail_as_bridge_errors",
+        "-v"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "corrupt-payload",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=Python client streams binary bytes",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "head-consumes-body",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=HEAD returns response headers",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "no-backpressure",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=headers and each bounded chunk",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "foreign-origin",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=disallowed origins",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "no-read-abort",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=a body read that ignores abort",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "reused-generation",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=stop/restart retires files",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "shared-slot",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_four_same_process_responses_and_fifth_waiter_are_isolated",
+        "-v"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "non-atomic-output",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=a mid-stream failure",
+        "qemu-build/test-browser-fetch.mjs"
+      ],
+      "exit_code": 1
+    }
+  ],
+  "local_vm": {
+    "package": "aider-chat==0.86.2",
+    "install_host_seconds": 311.997,
+    "installed_packages": 108,
+    "dependency_check_exit": 0,
+    "bridge": {
+      "available": true,
+      "protocol": 2,
+      "requests": 325,
+      "completed": 325,
+      "failed": 0,
+      "bytes": 193583504,
+      "active": 0,
+      "pypi": {
+        "projects": 108,
+        "cacheHits": 0,
+        "shared": 0,
+        "inputBytes": 64770128,
+        "outputBytes": 66180467,
+        "sessions": 0,
+        "wheels": 0,
+        "registryBytes": 0,
+        "cacheBytes": 0,
+        "cacheEntries": 0
+      }
+    },
+    "page_errors": [],
+    "terminal_buffered_bytes": 0,
+    "cross_origin_isolated": true,
+    "engine": {
+      "qemu-system-x86_64.data": {
+        "parts": [
+          "qemu-system-x86_64.data.partaa",
+          "qemu-system-x86_64.data.partab",
+          "qemu-system-x86_64.data.partac",
+          "qemu-system-x86_64.data.partad",
+          "qemu-system-x86_64.data.partae",
+          "qemu-system-x86_64.data.partaf",
+          "qemu-system-x86_64.data.partag",
+          "qemu-system-x86_64.data.partah",
+          "qemu-system-x86_64.data.partai",
+          "qemu-system-x86_64.data.partaj",
+          "qemu-system-x86_64.data.partak",
+          "qemu-system-x86_64.data.partal"
+        ],
+        "size": 247959038,
+        "sha256": "bc38bfd67a901fa36509dd9f97d7c54438c0e5f10833068497192ee041cbbd3c"
+      },
+      "qemu-system-x86_64.wasm": {
+        "parts": [
+          "qemu-system-x86_64.wasm.partaa",
+          "qemu-system-x86_64.wasm.partab"
+        ],
+        "size": 41244456,
+        "sha256": "71145727165c50786c69bdb836481dfb09acfbe0cdb5e627112e01d3b7c6fd4c"
+      }
+    }
+  },
+  "limitations": [
+    "Local installation is one sample; no new speedup claim.",
+    "CPU source tests require an unavailable QEMU_SOURCE_DIR; they did not execute in this run. The engine is unchanged.",
+    "Host Python 3.12 accepts the deeply nested JSON fixture. This host control proves shape validation, not the RecursionError conversion branch.",
+    "Initial asynchronous-FS independent harness attempts were invalid and excluded.",
+    "Original foreign-origin negative selector matched zero tests; the corrected selector failed as required.",
+    "Deployed acceptance follows the merge; this artifact records pre-deployment evidence only."
+  ],
+  "raw_evidence_directory": "/Users/chiragpatnaik/Code/Karkhana-transport-harden/qemu-build/diagnostics/transport-harden"
+}

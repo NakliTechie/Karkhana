@@ -4,7 +4,9 @@ import argparse
 import contextlib
 import fcntl
 import json
+import math
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -32,10 +34,17 @@ def _write(path, value):
         stream.write(value if isinstance(value, bytes) else value.encode())
 
 
+def _decode_json(data):
+    try:
+        return json.loads(data)
+    except RecursionError:
+        raise BridgeError('bridge JSON exceeds nesting limit') from None
+
+
 class Response:
     """One slot stays locked until EOF or close; consumers provide backpressure."""
     def __init__(self, url, headers=None, method='GET', timeout=120, pypi=None):
-        if not 1 <= timeout <= 600:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 600 or not math.isfinite(timeout):
             raise BridgeError('timeout must be between 1 and 600 seconds')
         self.deadline = time.monotonic() + timeout
         self.lock = None
@@ -49,21 +58,27 @@ class Response:
         self._readers = {}
         self._ack_stream = None
         self._ack_length = 0
+        self._iterator_active = False
         self.root = Path(os.environ.get('KARKHANA_FETCH_ROOT', '/persist/.karkhana-net'))
         try:
-            config = json.loads(_read(self.root / 'config.json', 16384))
-            if config.get('protocol') != 1 or not 1 <= config['slots'] <= 4:
-                raise BridgeError('unsupported bridge configuration')
+            config = _decode_json(_read(self.root / 'config.json', 16384))
+            if not isinstance(config, dict) or config.get('protocol') != 2:
+                raise BridgeError('unsupported bridge protocol; reload Karkhana')
+            if config.get('available') is not True:
+                raise BridgeError('browser bridge is unavailable', 'cancelled')
+            if type(config.get('slots')) is not int or not 1 <= config['slots'] <= 4:
+                raise BridgeError('invalid bridge slot configuration')
             if pypi is not None and config.get('pypiMetadata') != 1:
                 raise BridgeError('browser PyPI metadata processing is unavailable; reload Karkhana')
-            self.generation = config['generation']
-            self.chunk_bytes = config['chunkBytes']
-            if not isinstance(self.generation, str) or len(self.generation) > 64 or not 1 <= self.chunk_bytes <= 262144:
+            self.generation = config.get('generation')
+            self.chunk_bytes = config.get('chunkBytes')
+            if (not isinstance(self.generation, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', self.generation)
+                    or type(self.chunk_bytes) is not int or not 1 <= self.chunk_bytes <= 262144):
                 raise BridgeError('invalid bridge configuration')
             self.id = uuid.uuid4().hex
             self.token = f'{self.generation}:{self.id}'
             header_pairs = headers.items() if hasattr(headers, 'items') else (headers or [])
-            payload = {'protocol': 1, 'generation': self.generation,
+            payload = {'protocol': 2, 'generation': self.generation,
                 'id': self.id, 'url': url, 'method': method, 'headers': list(header_pairs),
                 'timeoutMs': int(timeout * 1000)}
             if pypi is not None:
@@ -85,7 +100,7 @@ class Response:
                             lock.close()
                         raise
                     self.lock = lock
-                    self.slot = self.root / str(index)
+                    self.slot = self.root / self.generation / str(index)
                     break
                 if self.lock is None:
                     self._pause()
@@ -94,11 +109,16 @@ class Response:
             _write(self.slot / 'request', request)
             _write(self.slot / 'request-ready', self.token)
             frame = self._frame()
-            if frame['kind'] != 'headers':
+            if frame.get('kind') != 'headers':
                 raise BridgeError('expected response headers')
-            self.status = frame['status']
-            self.headers = frame['headers']
-            self.url = frame['url']
+            self.status = frame.get('status')
+            self.headers = frame.get('headers')
+            self.url = frame.get('url')
+            if (type(self.status) is not int or not 100 <= self.status <= 599
+                    or not isinstance(self.url, str) or not isinstance(self.headers, list)
+                    or any(not isinstance(pair, list) or len(pair) != 2
+                           or any(not isinstance(value, str) for value in pair) for pair in self.headers)):
+                raise BridgeError('invalid response headers')
             self._ack()
         except BaseException:
             with contextlib.suppress(OSError):
@@ -108,6 +128,8 @@ class Response:
     def _ensure_open(self):
         if self.closed:
             raise BridgeError('response is closed', 'cancelled')
+        if time.monotonic() >= self.deadline:
+            raise BridgeError('request timed out (browser unavailable or transfer stalled)', 'timeout')
 
     def _read_mailbox(self, name, limit):
         with self._io_lock:
@@ -159,10 +181,14 @@ class Response:
     def _frame(self):
         while True:
             try:
-                frame = json.loads(self._read_mailbox('ready', 16384))
+                frame = _decode_json(self._read_mailbox('ready', 16384))
             except (ValueError, OSError):
                 self._pause()
                 continue
+            if not isinstance(frame, dict):
+                raise BridgeError('invalid response frame')
+            if type(frame.get('seq')) is not int:
+                raise BridgeError('invalid response sequence')
             if (frame.get('generation'), frame.get('id'), frame.get('seq')) == (self.generation, self.id, self.seq):
                 if frame.get('kind') == 'error':
                     raise BridgeError(frame.get('error', 'browser request failed'), frame.get('code', 'network'))
@@ -175,16 +201,24 @@ class Response:
             self.seq += 1
 
     def iter_chunks(self):
+        with self._io_lock:
+            if self.finished:
+                return
+            if self._iterator_active:
+                raise BridgeError('response already has an active iterator')
+            self._iterator_active = True
         try:
+            self._ensure_open()
             while not self.finished:
                 frame = self._frame()
-                if frame['kind'] == 'done':
+                if frame.get('kind') == 'done':
                     with self._io_lock:
                         self._ack()
                         self.finished = True
                         self.close()
                     return
-                if frame['kind'] != 'chunk' or not 0 < frame.get('size', 0) <= self.chunk_bytes:
+                if (frame.get('kind') != 'chunk' or type(frame.get('size')) is not int
+                        or not 0 < frame['size'] <= self.chunk_bytes):
                     raise BridgeError('invalid response frame')
                 chunk = self._read_mailbox('chunk', self.chunk_bytes)
                 if len(chunk) != frame['size']:
@@ -196,6 +230,9 @@ class Response:
             with contextlib.suppress(OSError):
                 self.close()
             raise
+        finally:
+            with self._io_lock:
+                self._iterator_active = False
 
     def close(self):
         # Close all descriptors before releasing the slot. A suspended iterator
