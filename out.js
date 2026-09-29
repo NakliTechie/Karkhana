@@ -1419,7 +1419,6 @@ var TTY = {
     read: (stream, buffer, offset, length) => {
       let readBytes = PTY.read(length);
       if (length && !readBytes.length) {
-        // QEMU sets stdin nonblocking; never sleep while it holds the I/O mutex.
         if (stream.flags & 2048) throw new FS.ErrnoError(6);
         PTY_askToWaitAgain(-1);
       }
@@ -5386,7 +5385,6 @@ function xterm_pty_old_poll(fds, nfds, timeout) {
 }
 
 var PTY_waitForReadableWithCallback = callback => {
-  // Input can arrive before the worker's asynchronous wait request is handled.
   if (PTY.readable) return callback(0);
   if (PTY_pollTimeout === 0) {
     return callback(PTY.readable ? 0 : 2);

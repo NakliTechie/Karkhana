@@ -54,6 +54,7 @@ qemu-build/*
 !qemu-build/test-browser-fetch.mjs
 !qemu-build/test-pypi-metadata.mjs
 !qemu-build/profile-pypi-metadata.mjs
+!qemu-build/benchmark-metadata-2026-09-29.json
 !qemu-build/fixtures/
 qemu-build/fixtures/*
 !qemu-build/fixtures/pypi-project.mjs

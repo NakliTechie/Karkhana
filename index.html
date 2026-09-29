@@ -415,7 +415,7 @@
             } catch (e) { /* direct mode */ }
             if (mf) {
               const engineUrls = {};
-              const cache = await caches.open('karkhana-engine-32be4e158a82').catch(() => null);
+              const cache = await caches.open('karkhana-engine-1b11d7d34e3a').catch(() => null);
               let done = 0;
               const total = Object.values(mf).reduce((a, f) => a + f.size, 0);
               // A reassembled engine is cached only after it matches the manifest.

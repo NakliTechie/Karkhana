@@ -10,20 +10,24 @@ The name means "workshop" in Hindi/Urdu.
 
 Karkhana boots **Debian 12 bookworm, x86_64, glibc 2.36** in a browser tab. Not a shim, not a Node sandbox — a full kernel (Linux 6.1) with real syscalls, real processes, and a real package manager, running on QEMU compiled to WebAssembly.
 
-That means `apt`-era userland expectations hold: Python 3.11 and Node 18 are there, `uv pip install` and `npm install -g` fetch from the real registries, and a coding agent runs *inside* the VM with a real filesystem to work on.
+Python 3.11 and Node 22 are available. `uv pip install` and `npm install -g` fetch from public registries. A coding agent runs inside the VM with a real filesystem.
 
-The first visit downloads a ~640 MB engine and takes a minute or two, most of it transfer. The engine is then cached in the browser, and later visits start from that copy.
+The first visit downloads about 280 MiB of engine assets. The browser caches them for later visits. Transfer time depends on the connection.
 
 ## What's inside the guest
 
 | | |
 |---|---|
-| **Base** | Debian 12 bookworm, x86_64, glibc 2.36, Linux 6.1, 4 vCPUs (MTTCG), 1024 MB RAM |
-| **Languages** | Python 3.11.2, Node 18.20.4, sqlite3, git, curl |
+| **Base** | Debian 12 bookworm, x86_64, glibc 2.36, Linux 6.1, 4 vCPUs (MTTCG), 1792 MB RAM |
+| **Languages** | Python 3.11.2, Node 22.23.3, sqlite3, git, curl |
 | **Python packages** | `kpip <pkg>` — `uv` tuned for the in-page network path. Plain `pip` stalls against the proxy; `uv` does not |
 | **Node packages** | `npm install -g` works against the real registry |
 | **Persistence** | `ksave` tars `/usr/local` + `/root` to `/persist/state.tar`; the page mirrors it to OPFS within a few seconds and restores it at the next login |
 | **Agent** | `/usr/bin/agent "task"` — an OpenAI-protocol tool loop with `run_command` / `read_file` / `write_file` / `list_directory` |
+
+Bun 1.4.2 executes JavaScript, cryptographic checks, and subprocesses on the x86-64-v2 guest CPU.
+OpenCode 1.18.33 passes version and help checks. Its version command takes approximately 153–180 guest seconds.
+Provider-authenticated OpenCode operations remain untested.
 
 ## Networking
 
@@ -37,6 +41,9 @@ the existing 9p mount to browser `fetch()`. Downloads avoid guest external TCP
 and TLS. The browser parses, validates, and rewrites project metadata.
 A guest loopback adapter streams encoded index responses and wheel bytes to uv.
 The guest does not parse or serialize project JSON.
+
+One matched full aider installation takes 5m41s with `kpip-fast`, versus 7m16s with `kpip`, measured on the host.
+Both runs use identical engines and package versions. See the [measurement record](qemu-build/benchmark-metadata-2026-09-29.json) for timings and limitations.
 
 ```bash
 kpip-fast 'httpx[http2]>=0.27,<1'
@@ -89,7 +96,6 @@ The 32-bit build had several things this one does not. Named plainly rather than
 - **No MCP server**, so external agents cannot connect to the VM yet.
 - **No file browser, toasts, or help modal.** The v86 sidebar read the guest filesystem directly; here the filesystem is only reachable through `shell.exec`, so the tree needs building rather than porting.
 - **No `fs` JS API** — `shell.exec` is the way in.
-- **Bun-based tools** (opencode and friends) trap: they need SSE4.2, and wasm TCG's `qemu64` is SSE2-era. Prebuilt Go and baseline-Rust binaries run fine.
 
 ## How it's different
 

@@ -1,0 +1,657 @@
+{
+  "date": "2026-09-29",
+  "scope": "One fresh browser session per path, measured sequentially on the same engine.",
+  "python": "3.11.2",
+  "uv": "0.12.18",
+  "source_commits": {
+    "baseline": "1fb1fd9",
+    "optimized": "e8179ca"
+  },
+  "engine": {
+    "qemu-system-x86_64.data": {
+      "parts": [
+        "qemu-system-x86_64.data.partaa",
+        "qemu-system-x86_64.data.partab",
+        "qemu-system-x86_64.data.partac",
+        "qemu-system-x86_64.data.partad",
+        "qemu-system-x86_64.data.partae",
+        "qemu-system-x86_64.data.partaf",
+        "qemu-system-x86_64.data.partag",
+        "qemu-system-x86_64.data.partah",
+        "qemu-system-x86_64.data.partai",
+        "qemu-system-x86_64.data.partaj",
+        "qemu-system-x86_64.data.partak",
+        "qemu-system-x86_64.data.partal"
+      ],
+      "size": 249372803,
+      "sha256": "09f3f293688c9d2db82e01fcdcbd426274b500b8613de0f0a4023741d085fe0a"
+    },
+    "qemu-system-x86_64.wasm": {
+      "parts": [
+        "qemu-system-x86_64.wasm.partaa",
+        "qemu-system-x86_64.wasm.partab"
+      ],
+      "size": 41244157,
+      "sha256": "66b2d7563f04fd6ca92025d22424e3c57a1e1b9fde54635c148cfb3b8d5c4218"
+    }
+  },
+  "runs": {
+    "baseline": {
+      "command": "kpip-fast --no-cache --reinstall aider-chat==0.86.2",
+      "host_started_at": "2026-09-29T08:48:14.461Z",
+      "host_install_seconds": 819.997,
+      "host_marker_polling_seconds": 1,
+      "guest_install_seconds": 798.05,
+      "uv_phases": {
+        "resolved": {
+          "packages": 108,
+          "guest_reported_seconds": 477.0
+        },
+        "prepared": {
+          "packages": 108,
+          "guest_reported_seconds": 253.0
+        },
+        "installed": {
+          "packages": 108,
+          "guest_reported_seconds": 12.0
+        },
+        "checked": {
+          "packages": 109,
+          "guest_reported_seconds": 8.29
+        }
+      },
+      "install_exit": 0,
+      "dependency_check_exit": 0,
+      "distribution_count": 112,
+      "fresh_session": true,
+      "terminal_probe_passed": true,
+      "page_errors": [],
+      "bridge": {
+        "available": true,
+        "protocol": 1,
+        "requests": 325,
+        "completed": 324,
+        "failed": 1,
+        "bytes": 223368301,
+        "active": 0
+      },
+      "assets_sha256": {
+        "index.html": "c804fbadd66267e9b309c161671a1585f9a328e6cad38618c25e340d3bc433f6",
+        "out.js": "a032213eeaa5e597d65d85f9dcba9bf440cf633c8b14fbec987a6ea6dcbc37cc",
+        "browser-fetch.js": "f285457090799b78a0f307325f5c53747c95cc1b8f3fa68f1de9ba69fe7ab41f",
+        "kfetch.py": "522bed96d22a89396124da683d7283b56f7d92483ae39eeb8ac9873cd3654a1d",
+        "kpip_fast.py": "4487212c4cfcf603d80f02d1d838851a8f064255d0cd191ef90076ad0f39b7df"
+      }
+    },
+    "optimized": {
+      "command": "kpip-fast --no-cache --reinstall aider-chat==0.86.2",
+      "host_started_at": "2026-09-29T09:03:06.091Z",
+      "host_install_seconds": 341.005,
+      "host_marker_polling_seconds": 1,
+      "guest_install_seconds": 331.52,
+      "uv_phases": {
+        "resolved": {
+          "packages": 108,
+          "guest_reported_seconds": 124.0
+        },
+        "prepared": {
+          "packages": 108,
+          "guest_reported_seconds": 134.0
+        },
+        "installed": {
+          "packages": 108,
+          "guest_reported_seconds": 15.51
+        },
+        "checked": {
+          "packages": 109,
+          "guest_reported_seconds": 7.85
+        }
+      },
+      "install_exit": 0,
+      "dependency_check_exit": 0,
+      "distribution_count": 112,
+      "fresh_session": true,
+      "terminal_probe_passed": true,
+      "page_errors": [],
+      "bridge": {
+        "available": true,
+        "protocol": 1,
+        "requests": 325,
+        "completed": 325,
+        "failed": 0,
+        "bytes": 193583504,
+        "active": 0,
+        "pypi": {
+          "projects": 108,
+          "cacheHits": 0,
+          "shared": 0,
+          "inputBytes": 64770128,
+          "outputBytes": 66180467,
+          "sessions": 0,
+          "wheels": 0,
+          "registryBytes": 0,
+          "cacheBytes": 0,
+          "cacheEntries": 0
+        }
+      },
+      "assets_sha256": {
+        "index.html": "c804fbadd66267e9b309c161671a1585f9a328e6cad38618c25e340d3bc433f6",
+        "out.js": "a032213eeaa5e597d65d85f9dcba9bf440cf633c8b14fbec987a6ea6dcbc37cc",
+        "browser-fetch.js": "a52e1ace9e01cd63ed1644396269f861933be09268e0f80b678001e10c455b46",
+        "pypi-metadata.js": "2d669c3c595d026c173888b7eee80bf1a05b6e607e313d0c9b2f6d451a39b833",
+        "kfetch.py": "5ffda78aec15f0f7a3ab48e345f41df2a88b58e0a8eca65f91858de8d7dc0bea",
+        "kpip_fast.py": "a83ad8428a89724d802996238f1de1246fe7c217e7ecec25f3524d09e8e98eab"
+      }
+    },
+    "legacy": {
+      "command": "kpip --no-cache --reinstall aider-chat==0.86.2",
+      "host_started_at": "2026-09-29T09:09:51.245Z",
+      "host_install_seconds": 436.01,
+      "host_marker_polling_seconds": 1,
+      "guest_install_seconds": 423.61,
+      "uv_phases": {
+        "resolved": {
+          "packages": 108,
+          "guest_reported_seconds": 144.0
+        },
+        "prepared": {
+          "packages": 108,
+          "guest_reported_seconds": 236.0
+        },
+        "installed": {
+          "packages": 108,
+          "guest_reported_seconds": 13.41
+        },
+        "checked": {
+          "packages": 109,
+          "guest_reported_seconds": 8.02
+        }
+      },
+      "install_exit": 0,
+      "dependency_check_exit": 0,
+      "distribution_count": 112,
+      "fresh_session": true,
+      "terminal_probe_passed": true,
+      "page_errors": [],
+      "bridge": {
+        "available": true,
+        "protocol": 1,
+        "requests": 0,
+        "completed": 0,
+        "failed": 0,
+        "bytes": 0,
+        "active": 0
+      },
+      "assets_sha256": {
+        "index.html": "c804fbadd66267e9b309c161671a1585f9a328e6cad38618c25e340d3bc433f6",
+        "out.js": "a032213eeaa5e597d65d85f9dcba9bf440cf633c8b14fbec987a6ea6dcbc37cc",
+        "browser-fetch.js": "f285457090799b78a0f307325f5c53747c95cc1b8f3fa68f1de9ba69fe7ab41f",
+        "kfetch.py": "522bed96d22a89396124da683d7283b56f7d92483ae39eeb8ac9873cd3654a1d",
+        "kpip_fast.py": "4487212c4cfcf603d80f02d1d838851a8f064255d0cd191ef90076ad0f39b7df"
+      }
+    }
+  },
+  "identical_distribution_graph": [
+    [
+      "ConfigArgParse",
+      "1.7.1"
+    ],
+    [
+      "GitPython",
+      "3.1.46"
+    ],
+    [
+      "Jinja2",
+      "3.1.6"
+    ],
+    [
+      "MarkupSafe",
+      "3.0.3"
+    ],
+    [
+      "PyYAML",
+      "6.0.3"
+    ],
+    [
+      "Pygments",
+      "2.19.2"
+    ],
+    [
+      "aider-chat",
+      "0.86.2"
+    ],
+    [
+      "aiohappyeyeballs",
+      "2.6.1"
+    ],
+    [
+      "aiohttp",
+      "3.13.3"
+    ],
+    [
+      "aiosignal",
+      "1.4.0"
+    ],
+    [
+      "annotated-doc",
+      "0.0.4"
+    ],
+    [
+      "annotated-types",
+      "0.7.0"
+    ],
+    [
+      "anyio",
+      "4.12.1"
+    ],
+    [
+      "asgiref",
+      "3.11.1"
+    ],
+    [
+      "attrs",
+      "25.4.0"
+    ],
+    [
+      "backoff",
+      "2.2.1"
+    ],
+    [
+      "beautifulsoup4",
+      "4.14.3"
+    ],
+    [
+      "certifi",
+      "2026.1.4"
+    ],
+    [
+      "cffi",
+      "2.0.0"
+    ],
+    [
+      "charset-normalizer",
+      "3.4.4"
+    ],
+    [
+      "click",
+      "8.3.1"
+    ],
+    [
+      "diff-match-patch",
+      "20241021"
+    ],
+    [
+      "diskcache",
+      "5.6.3"
+    ],
+    [
+      "distro",
+      "1.9.0"
+    ],
+    [
+      "fastapi",
+      "0.128.8"
+    ],
+    [
+      "fastuuid",
+      "0.14.0"
+    ],
+    [
+      "filelock",
+      "3.20.3"
+    ],
+    [
+      "flake8",
+      "7.3.0"
+    ],
+    [
+      "frozenlist",
+      "1.8.0"
+    ],
+    [
+      "fsspec",
+      "2026.2.0"
+    ],
+    [
+      "gitdb",
+      "4.0.12"
+    ],
+    [
+      "grep-ast",
+      "0.9.0"
+    ],
+    [
+      "h11",
+      "0.16.0"
+    ],
+    [
+      "hf-xet",
+      "1.2.0"
+    ],
+    [
+      "httpcore",
+      "1.0.9"
+    ],
+    [
+      "httpx",
+      "0.28.1"
+    ],
+    [
+      "huggingface_hub",
+      "1.4.1"
+    ],
+    [
+      "idna",
+      "3.11"
+    ],
+    [
+      "importlib_metadata",
+      "7.2.1"
+    ],
+    [
+      "importlib_resources",
+      "6.5.2"
+    ],
+    [
+      "jiter",
+      "0.13.0"
+    ],
+    [
+      "json5",
+      "0.13.0"
+    ],
+    [
+      "jsonschema",
+      "4.26.0"
+    ],
+    [
+      "jsonschema-specifications",
+      "2025.9.1"
+    ],
+    [
+      "litellm",
+      "1.81.10"
+    ],
+    [
+      "markdown-it-py",
+      "4.0.0"
+    ],
+    [
+      "mccabe",
+      "0.7.0"
+    ],
+    [
+      "mdurl",
+      "0.1.2"
+    ],
+    [
+      "mixpanel",
+      "5.0.0"
+    ],
+    [
+      "mslex",
+      "1.3.0"
+    ],
+    [
+      "multidict",
+      "6.7.1"
+    ],
+    [
+      "networkx",
+      "3.4.2"
+    ],
+    [
+      "numpy",
+      "1.26.4"
+    ],
+    [
+      "openai",
+      "2.20.0"
+    ],
+    [
+      "orjson",
+      "3.11.7"
+    ],
+    [
+      "oslex",
+      "0.1.3"
+    ],
+    [
+      "packaging",
+      "26.0"
+    ],
+    [
+      "pathspec",
+      "1.0.4"
+    ],
+    [
+      "pexpect",
+      "4.9.0"
+    ],
+    [
+      "pillow",
+      "12.1.1"
+    ],
+    [
+      "pip",
+      "23.0.1"
+    ],
+    [
+      "posthog",
+      "7.8.6"
+    ],
+    [
+      "prompt_toolkit",
+      "3.0.52"
+    ],
+    [
+      "propcache",
+      "0.4.1"
+    ],
+    [
+      "psutil",
+      "7.2.2"
+    ],
+    [
+      "ptyprocess",
+      "0.7.0"
+    ],
+    [
+      "pycodestyle",
+      "2.14.0"
+    ],
+    [
+      "pycparser",
+      "3.0"
+    ],
+    [
+      "pydantic",
+      "2.12.5"
+    ],
+    [
+      "pydantic_core",
+      "2.41.5"
+    ],
+    [
+      "pydub",
+      "0.25.1"
+    ],
+    [
+      "pyflakes",
+      "3.4.0"
+    ],
+    [
+      "pypandoc",
+      "1.16.2"
+    ],
+    [
+      "pyperclip",
+      "1.11.0"
+    ],
+    [
+      "python-dateutil",
+      "2.9.0.post0"
+    ],
+    [
+      "python-dotenv",
+      "1.2.1"
+    ],
+    [
+      "referencing",
+      "0.37.0"
+    ],
+    [
+      "regex",
+      "2026.1.15"
+    ],
+    [
+      "requests",
+      "2.32.5"
+    ],
+    [
+      "rich",
+      "14.3.2"
+    ],
+    [
+      "rpds-py",
+      "0.30.0"
+    ],
+    [
+      "scipy",
+      "1.15.3"
+    ],
+    [
+      "setuptools",
+      "66.1.1"
+    ],
+    [
+      "shellingham",
+      "1.5.4"
+    ],
+    [
+      "shtab",
+      "1.8.0"
+    ],
+    [
+      "six",
+      "1.17.0"
+    ],
+    [
+      "smmap",
+      "5.0.2"
+    ],
+    [
+      "sniffio",
+      "1.3.1"
+    ],
+    [
+      "socksio",
+      "1.0.0"
+    ],
+    [
+      "sounddevice",
+      "0.5.5"
+    ],
+    [
+      "soundfile",
+      "0.13.1"
+    ],
+    [
+      "soupsieve",
+      "2.8.3"
+    ],
+    [
+      "starlette",
+      "0.52.1"
+    ],
+    [
+      "tiktoken",
+      "0.12.0"
+    ],
+    [
+      "tokenizers",
+      "0.22.2"
+    ],
+    [
+      "tqdm",
+      "4.67.3"
+    ],
+    [
+      "tree-sitter",
+      "0.25.2"
+    ],
+    [
+      "tree-sitter-c-sharp",
+      "0.23.1"
+    ],
+    [
+      "tree-sitter-embedded-template",
+      "0.25.0"
+    ],
+    [
+      "tree-sitter-language-pack",
+      "0.13.0"
+    ],
+    [
+      "tree-sitter-yaml",
+      "0.7.2"
+    ],
+    [
+      "typer",
+      "0.23.0"
+    ],
+    [
+      "typer-slim",
+      "0.23.0"
+    ],
+    [
+      "typing-inspection",
+      "0.4.2"
+    ],
+    [
+      "typing_extensions",
+      "4.15.0"
+    ],
+    [
+      "urllib3",
+      "2.6.3"
+    ],
+    [
+      "uv",
+      "0.12.18"
+    ],
+    [
+      "watchfiles",
+      "1.1.1"
+    ],
+    [
+      "wcwidth",
+      "0.6.0"
+    ],
+    [
+      "wheel",
+      "0.38.4"
+    ],
+    [
+      "yarl",
+      "1.22.0"
+    ],
+    [
+      "zipp",
+      "3.23.0"
+    ]
+  ],
+  "comparison": {
+    "baseline_to_optimized_host_reduction_percent": 58.41387224587407,
+    "baseline_to_optimized_guest_resolution_reduction_percent": 74.0041928721174,
+    "legacy_to_optimized_host_reduction_percent": 21.789637852342835
+  },
+  "limitations": [
+    "Single sequential samples with live network traffic do not establish a general speed distribution.",
+    "The baseline recovered one bridge failure during downloads; total and preparation timing include its unisolated retry effect.",
+    "Host install intervals and guest-reported phase durations use different clocks.",
+    "Bridge counters do not observe traffic through the legacy gvisor path.",
+    "Mailbox byte counts differ through metadata rewriting and retries; they are not wire-throughput measurements.",
+    "The benchmark engine predates the CPU patch. The combined engine receives separate deployment verification."
+  ]
+}
