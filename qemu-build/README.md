@@ -142,6 +142,12 @@ requests for the same project share metadata processing. Encoded responses
 use a 16 MiB session cache, avoiding repeated parsing and serialization on
 retries. Individual encoded responses are capped at 32 MiB.
 
+The registry holds at most 200,000 advertised wheel records. Each stores one
+URL and its metadata permission. Sidecar URLs derive from those records,
+avoiding duplicate route and URL strings. The previous 100,000-route limit
+counted sidecars separately and rejected the tested 108-package dependency graph.
+Larger graphs still fail explicitly when they exceed the wheel-record cap.
+
 The adapter sets uv's HTTP timeout to 180 seconds. Guest metadata processing
 can exceed uv's default 30 seconds before sending its first response byte.
 Browser transfers retain their separate 120-second timeout. These bounds

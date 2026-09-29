@@ -179,6 +179,40 @@ class MetadataTests(unittest.TestCase):
         with self.assertRaises(adapter.AdapterError):
             self.index.file_url(urlsplit(result["files"][0]["url"]).path + ".metadata")
 
+    def test_sidecar_uses_one_wheel_record_and_exact_advertised_route(self):
+        with mock.patch.object(adapter, "MAX_REGISTERED_WHEELS", 1):
+            result = self.index.rewrite_project("example-pkg", PROJECT, self.base)
+        route = urlsplit(result["files"][0]["url"]).path
+        self.assertEqual(len(self.index.files), 1)
+        self.assertEqual(self.index.file_url(route), WHEEL_URL)
+        self.assertEqual(self.index.file_url(route + ".metadata"), WHEEL_URL + ".metadata")
+        for forbidden in (route + ".metadata.metadata", route + ".metadata/",
+                          route.replace("/123/", "/unadvertised/") + ".metadata",
+                          route + "%2emetadata"):
+            with self.subTest(path=forbidden):
+                with self.assertRaises(adapter.AdapterError) as caught:
+                    self.index.file_url(forbidden)
+                self.assertEqual(caught.exception.status, 403)
+
+    def test_false_metadata_permission_rejects_sidecar_but_allows_wheel(self):
+        project = copy.deepcopy(PROJECT)
+        project["files"][0]["core-metadata"] = False
+        result = self.index.rewrite_project("example-pkg", project, self.base)
+        route = urlsplit(result["files"][0]["url"]).path
+        self.assertEqual(self.index.file_url(route), WHEEL_URL)
+        with self.assertRaises(adapter.AdapterError) as caught:
+            self.index.file_url(route + ".metadata")
+        self.assertEqual(caught.exception.status, 403)
+
+    def test_cached_advertised_sidecar_survives_a_later_false_flag(self):
+        result = self.index.rewrite_project("example-pkg", PROJECT, self.base)
+        route = urlsplit(result["files"][0]["url"]).path
+        project = copy.deepcopy(PROJECT)
+        project["files"][0]["core-metadata"] = False
+        self.index.rewrite_project("example-pkg", project, self.base)
+        self.assertEqual(len(self.index.files), 1)
+        self.assertEqual(self.index.file_url(route + ".metadata"), WHEEL_URL + ".metadata")
+
     def test_external_origins_credentials_traversal_and_query_are_blocked(self):
         for url in (
             "https://evil.example/packages/" + WHEEL_NAME,
@@ -199,23 +233,42 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(self.index.files, {})
 
     def test_registration_limit_is_checked_before_mutation(self):
-        with mock.patch.object(adapter, "MAX_REGISTERED_FILES", 1):
+        project = copy.deepcopy(PROJECT)
+        second = copy.deepcopy(project["files"][0])
+        second["url"] = WHEEL_URL.replace("/123/", "/456/")
+        project["files"].append(second)
+        with mock.patch.object(adapter, "MAX_REGISTERED_WHEELS", 1):
             with self.assertRaises(adapter.AdapterError) as caught:
-                self.index.rewrite_project("example-pkg", PROJECT, self.base)
+                self.index.rewrite_project("example-pkg", project, self.base)
         self.assertEqual(caught.exception.status, 503)
         self.assertEqual(self.index.files, {})
 
     def test_registration_limit_counts_repeated_project_files_once(self):
-        with mock.patch.object(adapter, "MAX_REGISTERED_FILES", 2):
+        with mock.patch.object(adapter, "MAX_REGISTERED_WHEELS", 1):
             self.index.rewrite_project("example-pkg", PROJECT, self.base)
             self.index.rewrite_project("example-pkg", PROJECT, self.base)
-            self.assertEqual(len(self.index.files), 2)
+            self.assertEqual(len(self.index.files), 1)
             other = copy.deepcopy(PROJECT)
             other["files"][0]["url"] = WHEEL_URL.replace("/123/", "/456/")
             with self.assertRaises(adapter.AdapterError) as caught:
                 self.index.rewrite_project("example-pkg", other, self.base)
         self.assertEqual(caught.exception.status, 503)
-        self.assertEqual(len(self.index.files), 2)
+        self.assertEqual(len(self.index.files), 1)
+
+    def test_over_capacity_update_preserves_existing_sidecar_permission(self):
+        with mock.patch.object(adapter, "MAX_REGISTERED_WHEELS", 1):
+            result = self.index.rewrite_project("example-pkg", PROJECT, self.base)
+            route = urlsplit(result["files"][0]["url"]).path
+            project = copy.deepcopy(PROJECT)
+            project["files"][0]["core-metadata"] = False
+            extra = copy.deepcopy(project["files"][0])
+            extra["url"] = WHEEL_URL.replace("/123/", "/456/")
+            project["files"].append(extra)
+            with self.assertRaises(adapter.AdapterError) as caught:
+                self.index.rewrite_project("example-pkg", project, self.base)
+        self.assertEqual(caught.exception.status, 503)
+        self.assertEqual(len(self.index.files), 1)
+        self.assertEqual(self.index.file_url(route + ".metadata"), WHEEL_URL + ".metadata")
 
 
 class HTTPTests(unittest.TestCase):
