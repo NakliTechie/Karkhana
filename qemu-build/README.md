@@ -136,6 +136,17 @@ wheels. Installer config and proxy overrides cannot select another index.
 An explicit loopback proxy rejects external HTTP targets and HTTPS CONNECT.
 The existing `kpip`, npm, relay, and gvisor paths remain available.
 
+Canonical PyPI wheel URLs use a restricted validation path to avoid repeated
+generic URL parsing under TCG. Other URLs retain full validation. Concurrent
+requests for the same project share metadata processing. Encoded responses
+use a 16 MiB session cache, avoiding repeated parsing and serialization on
+retries. Individual encoded responses are capped at 32 MiB.
+
+The adapter sets uv's HTTP timeout to 180 seconds. Guest metadata processing
+can exceed uv's default 30 seconds before sending its first response byte.
+Browser transfers retain their separate 120-second timeout. These bounds
+allow useful processing while retaining explicit failure for stalled requests.
+
 Limits: source builds, private indexes, requirement files, direct URL/VCS
 dependencies, npm, and arbitrary origins are unsupported. CORS still applies.
 The guest still spends CPU on Python, loopback HTTP, 9p, decompression, and
@@ -147,6 +158,7 @@ Host checks require Node and Python, without an engine rebuild:
 ```bash
 node qemu-build/test-browser-fetch.mjs
 python3 qemu-build/test-kpip-fast.py
+python3 qemu-build/test-kpip-cache.py
 node qemu-build/test-pty.mjs
 ```
 

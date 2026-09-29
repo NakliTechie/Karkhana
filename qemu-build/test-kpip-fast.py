@@ -140,6 +140,37 @@ class MetadataTests(unittest.TestCase):
         result = self.index.rewrite_project("example-pkg", project, self.base)
         self.assertIn(b'data-yanked=""', adapter.project_html(result))
 
+    def test_canonical_wheels_skip_generic_url_work_and_preserve_fragments(self):
+        canonical_url = "https://files.pythonhosted.org/packages/ab/cd/" + "e" * 60 + "/" + WHEEL_NAME
+        for fragment in ("", "#sha256=" + WHEEL_HASH):
+            with self.subTest(fragment=fragment):
+                project = copy.deepcopy(PROJECT)
+                project["files"][0]["url"] = canonical_url + fragment
+                with (mock.patch.object(adapter, "urljoin", side_effect=AssertionError("unexpected generic join")),
+                      mock.patch.object(adapter, "_safe_file_url", side_effect=AssertionError("unexpected generic parse")),
+                      mock.patch.object(adapter, "urlunsplit", side_effect=AssertionError("unexpected generic serialization"))):
+                    result = self.index.rewrite_project("example-pkg", project, self.base)
+                rewritten = result["files"][0]
+                self.assertEqual(urlsplit(rewritten["url"]).fragment, "sha256=" + WHEEL_HASH)
+                route = urlsplit(rewritten["url"]).path
+                self.assertEqual(self.index.file_url(route), canonical_url)
+                self.assertEqual(self.index.file_url(route + ".metadata"), canonical_url + ".metadata")
+
+    def test_noncanonical_allowed_urls_keep_strict_fallback(self):
+        for url in (WHEEL_URL.replace("https://", "//"),
+                    WHEEL_URL.replace(".org/", ".org:443/"),
+                    WHEEL_URL.replace("example_pkg", "example%5fpkg")):
+            with self.subTest(url=url):
+                project = copy.deepcopy(PROJECT)
+                project["files"][0]["url"] = url
+                with mock.patch.object(adapter, "_safe_file_url", wraps=adapter._safe_file_url) as validate:
+                    result = self.index.rewrite_project("example-pkg", project, self.base)
+                validate.assert_called_once()
+                route = urlsplit(result["files"][0]["url"]).path
+                expected = "https:" + url if url.startswith("//") else url
+                self.assertEqual(self.index.file_url(route), expected)
+                self.assertEqual(self.index.file_url(route + ".metadata"), expected + ".metadata")
+
     def test_metadata_route_requires_advertisement(self):
         project = copy.deepcopy(PROJECT)
         project["files"][0].pop("core-metadata")
@@ -173,6 +204,18 @@ class MetadataTests(unittest.TestCase):
                 self.index.rewrite_project("example-pkg", PROJECT, self.base)
         self.assertEqual(caught.exception.status, 503)
         self.assertEqual(self.index.files, {})
+
+    def test_registration_limit_counts_repeated_project_files_once(self):
+        with mock.patch.object(adapter, "MAX_REGISTERED_FILES", 2):
+            self.index.rewrite_project("example-pkg", PROJECT, self.base)
+            self.index.rewrite_project("example-pkg", PROJECT, self.base)
+            self.assertEqual(len(self.index.files), 2)
+            other = copy.deepcopy(PROJECT)
+            other["files"][0]["url"] = WHEEL_URL.replace("/123/", "/456/")
+            with self.assertRaises(adapter.AdapterError) as caught:
+                self.index.rewrite_project("example-pkg", other, self.base)
+        self.assertEqual(caught.exception.status, 503)
+        self.assertEqual(len(self.index.files), 2)
 
 
 class HTTPTests(unittest.TestCase):

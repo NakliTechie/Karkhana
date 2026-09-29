@@ -7,6 +7,8 @@ direct URL dependencies declared by packages. No guest TLS is used for PyPI.
 """
 
 import argparse
+from collections import OrderedDict
+from concurrent.futures import Future
 import html
 import json
 import os
@@ -22,6 +24,9 @@ from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 JSON_TYPE = "application/vnd.pypi.simple.v1+json"
 HTML_TYPE = "application/vnd.pypi.simple.v1+html"
 MAX_PROJECT_BYTES = 16 * 1024 * 1024
+MAX_ENCODED_METADATA_BYTES = 32 * 1024 * 1024
+MAX_METADATA_CACHE_BYTES = 16 * 1024 * 1024
+HTTP_TIMEOUT_SECONDS = 180
 MAX_REGISTERED_FILES = 100_000
 CHUNK_BYTES = 64 * 1024
 NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
@@ -31,6 +36,14 @@ SPECIFIER = r"(?:===|~=|==|!=|<=|>=|<|>)\s*[A-Za-z0-9*+!._-]+"
 SPECIFIERS = rf"{SPECIFIER}(?:\s*,\s*{SPECIFIER})*"
 REQUIREMENT_RE = re.compile(rf"{NAME}\s*{EXTRAS}\s*(?:{SPECIFIERS}|\(\s*{SPECIFIERS}\s*\))?\s*\Z")
 MARKER_RE = re.compile(r"[A-Za-z0-9_ .<>=!~'\"()\[\],-]+\Z")
+# PyPI's common content-addressed wheel URLs need no generic URL parsing.
+# Exact origin, fixed hexadecimal directories, and an ASCII wheel basename
+# exclude credentials, ports, traversal, percent escapes, and query strings.
+CANONICAL_WHEEL_URL_RE = re.compile(
+    r"https://files\.pythonhosted\.org"
+    r"(/packages/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{60}/([A-Za-z0-9_.!+-]+\.whl))"
+    r"(?:#([A-Za-z0-9_=+-]+))?\Z"
+)
 
 
 class AdapterError(Exception):
@@ -105,6 +118,9 @@ def installer_environment(base_url, environ=None):
         env[key] = env[key.lower()] = base_url
     env["NO_PROXY"] = env["no_proxy"] = ""
     env["UV_CONCURRENT_DOWNLOADS"] = "4"
+    # Cold metadata parsing/rewriting runs under TCG before the first response
+    # byte. Match this bounded useful-work budget instead of uv's 30s default.
+    env["UV_HTTP_TIMEOUT"] = str(HTTP_TIMEOUT_SECONDS)
     env["UV_PYTHON_DOWNLOADS"] = "never"
     return env
 
@@ -139,6 +155,50 @@ class PackageIndex:
         self.fetch = fetch
         self.files = {}
         self.lock = threading.Lock()
+        self.responses = OrderedDict()
+        self.response_bytes = 0
+        self.pending_responses = {}
+
+    def project_response(self, project, base_url, wants_json):
+        """Share in-flight work and retain encoded bytes within a fixed budget."""
+        key = (project, base_url, wants_json)
+        with self.lock:
+            if key in self.responses:
+                self.responses.move_to_end(key)
+                return self.responses[key]
+            pending = self.pending_responses.get(key)
+            producer = pending is None
+            if producer:
+                pending = Future()
+                self.pending_responses[key] = pending
+        if not producer:
+            return pending.result(timeout=HTTP_TIMEOUT_SECONDS)
+        try:
+            document = self.read_project(project, base_url)
+            if wants_json:
+                response = (JSON_TYPE, json.dumps(document, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
+            else:
+                response = (HTML_TYPE, project_html(document))
+            size = len(response[1])
+            if size > MAX_ENCODED_METADATA_BYTES:
+                raise AdapterError(502, "Encoded PyPI metadata exceeds 32 MiB")
+            # Store before the client write: if uv abandoned that connection,
+            # its retry reuses these bytes without another parse or rewrite.
+            with self.lock:
+                if size <= MAX_METADATA_CACHE_BYTES:
+                    while self.response_bytes + size > MAX_METADATA_CACHE_BYTES:
+                        _, evicted = self.responses.popitem(last=False)
+                        self.response_bytes -= len(evicted[1])
+                    self.responses[key] = response
+                    self.response_bytes += size
+                self.pending_responses.pop(key, None)
+            pending.set_result(response)
+            return response
+        except BaseException as error:
+            with self.lock:
+                self.pending_responses.pop(key, None)
+            pending.set_exception(error)
+            raise
 
     def rewrite_project(self, project, document, base_url):
         if not isinstance(document, dict) or not isinstance(document.get("files"), list):
@@ -154,22 +214,32 @@ class PackageIndex:
                 continue  # This adapter never offers source distributions.
             if not isinstance(entry.get("url"), str):
                 raise AdapterError(502, "Missing download URL in PyPI metadata")
-            original = urljoin("https://pypi.org/simple/" + project + "/", entry["url"])
-            parsed = _safe_file_url(original)
-            if unquote(parsed.path.rsplit("/", 1)[-1]) != filename:
+            original = entry["url"]
+            canonical = CANONICAL_WHEEL_URL_RE.fullmatch(original)
+            if canonical:
+                path, advertised_filename, fragment = canonical.groups()
+                clean_url = original.partition("#")[0] if fragment else original
+            else:
+                original = urljoin("https://pypi.org/simple/" + project + "/", original)
+                parsed = _safe_file_url(original)
+                path = parsed.path
+                advertised_filename = unquote(path.rsplit("/", 1)[-1])
+                fragment = parsed.fragment
+                clean_url = urlunsplit(parsed._replace(fragment=""))
+            if advertised_filename != filename:
                 raise AdapterError(502, "Download filename does not match PyPI metadata")
-            route = "/files" + parsed.path
-            clean_url = urlunsplit(parsed._replace(fragment=""))
+            route = "/files" + path
             additions[route] = clean_url
             metadata = entry.get("core-metadata", entry.get("dist-info-metadata", False))
             if metadata:
-                additions[route + ".metadata"] = urlunsplit(parsed._replace(path=parsed.path + ".metadata", fragment=""))
+                additions[route + ".metadata"] = clean_url + ".metadata"
             rewritten = dict(entry)
-            fragment = parsed.fragment or _hash_fragment(entry.get("hashes"))
+            fragment = fragment or _hash_fragment(entry.get("hashes"))
             rewritten["url"] = base_url + route + ("#" + fragment if fragment else "")
             result["files"].append(rewritten)
         with self.lock:
-            if len(self.files.keys() | additions.keys()) > MAX_REGISTERED_FILES:
+            if (len(self.files) + len(additions) > MAX_REGISTERED_FILES
+                    and len(self.files) + len(additions.keys() - self.files.keys()) > MAX_REGISTERED_FILES):
                 raise AdapterError(503, "Package metadata exceeds this session's file limit")
             self.files.update(additions)
         return result
@@ -308,13 +378,8 @@ class IndexHandler(BaseHTTPRequestHandler):
             if path.startswith("/simple/"):
                 name = path[len("/simple/"):].removesuffix("/")
                 project = normalize_project(name)
-                document = self.server.index.read_project(project, self.server.base_url)
-                if JSON_TYPE in self.headers.get("Accept", ""):
-                    body = json.dumps(document, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
-                    content_type = JSON_TYPE
-                else:
-                    body = project_html(document)
-                    content_type = HTML_TYPE
+                content_type, body = self.server.index.project_response(
+                    project, self.server.base_url, JSON_TYPE in self.headers.get("Accept", ""))
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(body)))
