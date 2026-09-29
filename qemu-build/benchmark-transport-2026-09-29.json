@@ -1,0 +1,539 @@
+{
+  "date": "2026-09-29",
+  "scope": "Reusable guest mailbox handles compared with the preceding browser-metadata client on an unchanged engine.",
+  "source_commits": {
+    "baseline": "83742728c4dd543d8afe1f945286b0be671db85b",
+    "final_optimized": "a2c82331a3fb549dbd4a989246066d775f918182"
+  },
+  "helper_sha256": {
+    "baseline": "5ffda78aec15f0f7a3ab48e345f41df2a88b58e0a8eca65f91858de8d7dc0bea",
+    "matched_optimized": "533df23d4cc66f225bb99dd40e2c314d6879cad2c1327d01a21ded6e6aa361e3",
+    "final_optimized": "2e80249482a805934f9d882a4005af77d21d76066f11363c23747ae2075b0ed0"
+  },
+  "measured_to_final_change": "Final source adds only cleanup after unexpected flock failure. The optimized full install uses final source.",
+  "engine": {
+    "qemu-system-x86_64.data": {
+      "size": 247959038,
+      "sha256": "bc38bfd67a901fa36509dd9f97d7c54438c0e5f10833068497192ee041cbbd3c"
+    },
+    "qemu-system-x86_64.wasm": {
+      "size": 41244456,
+      "sha256": "71145727165c50786c69bdb836481dfb09acfbe0cdb5e627112e01d3b7c6fd4c"
+    }
+  },
+  "unchanged_assets_sha256": {
+    "index.html": "6b645143891cde5912a718a376210260e8238fa4c365a5c4cd73286c6e6eefeb",
+    "out.js": "dd7388197935b28fba4a4cd0e699e598c36c79696454dc0e87e398553567c48b",
+    "browser-fetch.js": "a52e1ace9e01cd63ed1644396269f861933be09268e0f80b678001e10c455b46",
+    "pypi-metadata.js": "2d669c3c595d026c173888b7eee80bf1a05b6e607e313d0c9b2f6d451a39b833",
+    "kpip_fast.py": "a83ad8428a89724d802996238f1de1246fe7c217e7ecec25f3524d09e8e98eab"
+  },
+  "fixture": {
+    "url": "https://files.pythonhosted.org/packages/3a/d0/edc009c27b406c4f9cbc79274d6e46d634d139075492ad055e3d68445925/numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "bytes": 18252005,
+    "sha256": "666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5"
+  },
+  "transport": {
+    "protocol": 1,
+    "slots": 4,
+    "chunk_bytes": 262144,
+    "guest_poll_ms": 10,
+    "browser_poll_ms": 20,
+    "host_interval": "Guest running marker through transferred marker, observed on file close; integrity checks excluded.",
+    "mode_definitions": {
+      "bridge_copy": "In-process guest fetch into a file.",
+      "http_bridge": "Guest curl through the loopback adapter; host interval includes process startup.",
+      "bridge_cli": "Guest kfetch CLI; interval includes Python process startup."
+    },
+    "source_definitions": {
+      "memory": "Browser serves the prefetched fixture from memory through the real guest 9p mailbox.",
+      "real": "Browser fetches the pinned remote wheel through the real guest 9p mailbox."
+    },
+    "samples": [
+      {
+        "source": "memory",
+        "mode": "bridge_copy",
+        "pair_order": [
+          [
+            "baseline",
+            "optimized"
+          ],
+          [
+            "optimized",
+            "baseline"
+          ]
+        ],
+        "baseline": {
+          "hostSeconds": [
+            8.098555,
+            9.005735
+          ],
+          "guestSeconds": [
+            8.04,
+            9
+          ]
+        },
+        "optimized": {
+          "hostSeconds": [
+            3.00452,
+            3.6812
+          ],
+          "guestSeconds": [
+            2.87,
+            3.67
+          ]
+        }
+      },
+      {
+        "source": "memory",
+        "mode": "http_bridge",
+        "pair_order": [
+          [
+            "baseline",
+            "optimized"
+          ],
+          [
+            "optimized",
+            "baseline"
+          ]
+        ],
+        "baseline": {
+          "hostSeconds": [
+            15.39994,
+            9.811545
+          ],
+          "guestSeconds": [
+            15.41,
+            9.81
+          ],
+          "curlTotalSeconds": [
+            9.04,
+            8.45
+          ]
+        },
+        "optimized": {
+          "hostSeconds": [
+            5.362075,
+            5.52384
+          ],
+          "guestSeconds": [
+            5.35,
+            5.52
+          ],
+          "curlTotalSeconds": [
+            3.97,
+            4.14
+          ]
+        }
+      },
+      {
+        "source": "memory",
+        "mode": "bridge_cli",
+        "pair_order": [
+          [
+            "baseline",
+            "optimized"
+          ],
+          [
+            "optimized",
+            "baseline"
+          ]
+        ],
+        "baseline": {
+          "hostSeconds": [
+            14.449485,
+            15.543385
+          ],
+          "guestSeconds": [
+            14.46,
+            15.56
+          ]
+        },
+        "optimized": {
+          "hostSeconds": [
+            9.999965,
+            11.68062
+          ],
+          "guestSeconds": [
+            10,
+            11.67
+          ]
+        }
+      },
+      {
+        "source": "real",
+        "mode": "bridge_cli",
+        "pair_order": [
+          [
+            "baseline",
+            "optimized"
+          ],
+          [
+            "optimized",
+            "baseline"
+          ]
+        ],
+        "baseline": {
+          "hostSeconds": [
+            16.34191,
+            16.53069
+          ],
+          "guestSeconds": [
+            16.33,
+            16.55
+          ]
+        },
+        "optimized": {
+          "hostSeconds": [
+            11.95154,
+            12.278825
+          ],
+          "guestSeconds": [
+            11.94,
+            12.28
+          ]
+        }
+      }
+    ],
+    "browser_downloads": [
+      {
+        "label": "prefetch",
+        "hostSeconds": 1.9548149999976159,
+        "headersSeconds": 0.09675499999523163,
+        "bytes": 18252005,
+        "reads": 697,
+        "sha256": "666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5"
+      },
+      {
+        "label": "final-browser",
+        "hostSeconds": 1.6696349999904632,
+        "headersSeconds": 0.0138299999833107,
+        "bytes": 18252005,
+        "reads": 685,
+        "sha256": "666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5"
+      }
+    ],
+    "integrity_checked_guest_payloads": 22,
+    "integrity_checked_browser_downloads": 2,
+    "lifecycle": {
+      "concurrent_transfers": 4,
+      "concurrent_payloads": "Four copies of the same pinned fixture; every byte count and SHA-256 matched.",
+      "concurrent_guest_seconds": 5.57,
+      "cancel": {
+        "mode": "cancel",
+        "guestSeconds": 0.23999999999998067,
+        "firstBytes": 262144,
+        "closed": true
+      },
+      "injected_failure": {
+        "mode": "truncated",
+        "guestSeconds": 0.3900000000000148,
+        "expectedError": "Injected upstream truncation",
+        "code": "network"
+      },
+      "recovery": [
+        {
+          "id": "post-cancel",
+          "mode": "bridge_copy",
+          "hostSeconds": 3.5270699999928476,
+          "guestSeconds": 3.5100000000000193
+        },
+        {
+          "id": "post-truncated",
+          "mode": "bridge_copy",
+          "hostSeconds": 3.6177549999952316,
+          "guestSeconds": 3.609999999999985
+        }
+      ],
+      "distinct_payload_isolation": "Host integration tests use five distinct payloads across four slots and one waiting client.",
+      "final_bridge": {
+        "available": true,
+        "protocol": 1,
+        "requests": 26,
+        "completed": 24,
+        "failed": 2,
+        "bytes": 405573037,
+        "active": 0,
+        "pypi": {
+          "projects": 1,
+          "cacheHits": 0,
+          "shared": 0,
+          "inputBytes": 2780148,
+          "outputBytes": 2980351,
+          "sessions": 0,
+          "wheels": 0,
+          "registryBytes": 0,
+          "cacheBytes": 0,
+          "cacheEntries": 0
+        }
+      }
+    }
+  },
+  "full_install": {
+    "command": "kpip-fast --no-cache --reinstall aider-chat==0.86.2",
+    "python": "3.11.2",
+    "uv": "0.12.18",
+    "samples_per_implementation": 1,
+    "host_marker_polling_seconds": 1,
+    "samples": {
+      "baseline": {
+        "host_started_at": "2026-09-29T11:38:21.874Z",
+        "host_seconds": 328.009,
+        "guest_seconds": 327.2,
+        "uv_phases": {
+          "resolved": {
+            "packages": 108,
+            "guest_seconds": 121.0
+          },
+          "prepared": {
+            "packages": 108,
+            "guest_seconds": 140.0
+          },
+          "installed": {
+            "packages": 108,
+            "guest_seconds": 12.83
+          },
+          "checked": {
+            "packages": 109,
+            "guest_seconds": 8.68
+          }
+        },
+        "install_exit": 0,
+        "dependency_check_exit": 0,
+        "terminal_probe_passed": true,
+        "fresh_session": true,
+        "bridge": {
+          "available": true,
+          "protocol": 1,
+          "requests": 325,
+          "completed": 325,
+          "failed": 0,
+          "bytes": 193583504,
+          "active": 0,
+          "pypi": {
+            "projects": 108,
+            "cacheHits": 0,
+            "shared": 0,
+            "inputBytes": 64770128,
+            "outputBytes": 66180467,
+            "sessions": 0,
+            "wheels": 0,
+            "registryBytes": 0,
+            "cacheBytes": 0,
+            "cacheEntries": 0
+          }
+        }
+      },
+      "optimized": {
+        "host_started_at": "2026-09-29T11:47:27.278Z",
+        "host_seconds": 311.006,
+        "guest_seconds": 311.35,
+        "uv_phases": {
+          "resolved": {
+            "packages": 108,
+            "guest_seconds": 103.0
+          },
+          "prepared": {
+            "packages": 108,
+            "guest_seconds": 139.0
+          },
+          "installed": {
+            "packages": 108,
+            "guest_seconds": 12.66
+          },
+          "checked": {
+            "packages": 109,
+            "guest_seconds": 8.18
+          }
+        },
+        "install_exit": 0,
+        "dependency_check_exit": 0,
+        "terminal_probe_passed": true,
+        "fresh_session": true,
+        "bridge": {
+          "available": true,
+          "protocol": 1,
+          "requests": 325,
+          "completed": 325,
+          "failed": 0,
+          "bytes": 193583504,
+          "active": 0,
+          "pypi": {
+            "projects": 108,
+            "cacheHits": 0,
+            "shared": 0,
+            "inputBytes": 64770128,
+            "outputBytes": 66180467,
+            "sessions": 0,
+            "wheels": 0,
+            "registryBytes": 0,
+            "cacheBytes": 0,
+            "cacheEntries": 0
+          }
+        }
+      }
+    },
+    "host_reduction_percent": 5.183699,
+    "identical_inventory": true,
+    "inventory_distributions": 112,
+    "installed_packages": 108,
+    "dependency_checked_packages": 109,
+    "inventory_sha256": "060a8a0285a4d7faf2ab14b298eac7c3f9c5de413ff3b3dcca002abeccc05a47",
+    "inventory_hash_encoding": "UTF-8 JSON array of [name, version] pairs sorted lexicographically, with comma and colon separators.",
+    "inventory": {
+      "ConfigArgParse": "1.7.1",
+      "GitPython": "3.1.46",
+      "Jinja2": "3.1.6",
+      "MarkupSafe": "3.0.3",
+      "PyYAML": "6.0.3",
+      "Pygments": "2.19.2",
+      "aider-chat": "0.86.2",
+      "aiohappyeyeballs": "2.6.1",
+      "aiohttp": "3.13.3",
+      "aiosignal": "1.4.0",
+      "annotated-doc": "0.0.4",
+      "annotated-types": "0.7.0",
+      "anyio": "4.12.1",
+      "asgiref": "3.11.1",
+      "attrs": "25.4.0",
+      "backoff": "2.2.1",
+      "beautifulsoup4": "4.14.3",
+      "certifi": "2026.1.4",
+      "cffi": "2.0.0",
+      "charset-normalizer": "3.4.4",
+      "click": "8.3.1",
+      "diff-match-patch": "20241021",
+      "diskcache": "5.6.3",
+      "distro": "1.9.0",
+      "fastapi": "0.128.8",
+      "fastuuid": "0.14.0",
+      "filelock": "3.20.3",
+      "flake8": "7.3.0",
+      "frozenlist": "1.8.0",
+      "fsspec": "2026.2.0",
+      "gitdb": "4.0.12",
+      "grep-ast": "0.9.0",
+      "h11": "0.16.0",
+      "hf-xet": "1.2.0",
+      "httpcore": "1.0.9",
+      "httpx": "0.28.1",
+      "huggingface_hub": "1.4.1",
+      "idna": "3.11",
+      "importlib_metadata": "7.2.1",
+      "importlib_resources": "6.5.2",
+      "jiter": "0.13.0",
+      "json5": "0.13.0",
+      "jsonschema": "4.26.0",
+      "jsonschema-specifications": "2025.9.1",
+      "litellm": "1.81.10",
+      "markdown-it-py": "4.0.0",
+      "mccabe": "0.7.0",
+      "mdurl": "0.1.2",
+      "mixpanel": "5.0.0",
+      "mslex": "1.3.0",
+      "multidict": "6.7.1",
+      "networkx": "3.4.2",
+      "numpy": "1.26.4",
+      "openai": "2.20.0",
+      "orjson": "3.11.7",
+      "oslex": "0.1.3",
+      "packaging": "26.0",
+      "pathspec": "1.0.4",
+      "pexpect": "4.9.0",
+      "pillow": "12.1.1",
+      "pip": "23.0.1",
+      "posthog": "7.8.6",
+      "prompt_toolkit": "3.0.52",
+      "propcache": "0.4.1",
+      "psutil": "7.2.2",
+      "ptyprocess": "0.7.0",
+      "pycodestyle": "2.14.0",
+      "pycparser": "3.0",
+      "pydantic": "2.12.5",
+      "pydantic_core": "2.41.5",
+      "pydub": "0.25.1",
+      "pyflakes": "3.4.0",
+      "pypandoc": "1.16.2",
+      "pyperclip": "1.11.0",
+      "python-dateutil": "2.9.0.post0",
+      "python-dotenv": "1.2.1",
+      "referencing": "0.37.0",
+      "regex": "2026.1.15",
+      "requests": "2.32.5",
+      "rich": "14.3.2",
+      "rpds-py": "0.30.0",
+      "scipy": "1.15.3",
+      "setuptools": "66.1.1",
+      "shellingham": "1.5.4",
+      "shtab": "1.8.0",
+      "six": "1.17.0",
+      "smmap": "5.0.2",
+      "sniffio": "1.3.1",
+      "socksio": "1.0.0",
+      "sounddevice": "0.5.5",
+      "soundfile": "0.13.1",
+      "soupsieve": "2.8.3",
+      "starlette": "0.52.1",
+      "tiktoken": "0.12.0",
+      "tokenizers": "0.22.2",
+      "tqdm": "4.67.3",
+      "tree-sitter": "0.25.2",
+      "tree-sitter-c-sharp": "0.23.1",
+      "tree-sitter-embedded-template": "0.25.0",
+      "tree-sitter-language-pack": "0.13.0",
+      "tree-sitter-yaml": "0.7.2",
+      "typer": "0.23.0",
+      "typer-slim": "0.23.0",
+      "typing-inspection": "0.4.2",
+      "typing_extensions": "4.15.0",
+      "urllib3": "2.6.3",
+      "uv": "0.12.18",
+      "watchfiles": "1.1.1",
+      "wcwidth": "0.6.0",
+      "wheel": "0.38.4",
+      "yarl": "1.22.0",
+      "zipp": "3.23.0"
+    }
+  },
+  "host_checks": {
+    "passed": 92,
+    "suites": {
+      "test-kfetch.py": 23,
+      "test-browser-fetch.mjs": 14,
+      "test-pypi-metadata.mjs": 17,
+      "test-kpip-fast.py": 14,
+      "test-kpip-cache.py": 5,
+      "test-pty.mjs": 11,
+      "test-cpu.mjs": 8
+    },
+    "baseline_regressions_detected": 3,
+    "targeted_mutations_detected": 9,
+    "negative_control_limits": [
+      "The buffered-reader mutation fails the explicit unbuffered-handle assertion; it does not reproduce stale bytes.",
+      "Closed-guard negative controls time out before successor-state assertions execute."
+    ]
+  },
+  "raw_evidence": {
+    "storage": "Local ignored diagnostics; paths are relative to qemu-build.",
+    "files": {
+      "diagnostics/transport-goal/findings.json": "7a8dc59a8dae242337c17e6db1490709efb4ccb92ed4fcfc5c5ebf21ea7cb283",
+      "diagnostics/transport-goal/matched/results.json": "eafe2fc773f46a82492ad108f87d524b5a025a76ab6fcea59dee3344523f53b6",
+      "diagnostics/transport-goal/baseline-install/result.json": "c49ae12775dc894ce1cf71f74ba2161f8cfe3c7fc853f15b38cf6b005710c5f3",
+      "diagnostics/transport-goal/optimized-install/result.json": "3141baee4d5a15f62145912dad69e24d92d739b1634158aaeff7ac33e6c5a9ae",
+      "diagnostics/transport-goal/measured-to-final.diff": "9e772ea2489dd48147af73e33d5855ceb2ec4f83009db73725c5e7178703e941"
+    }
+  },
+  "limitations": [
+    "Two ordered transport pairs per mode do not establish a speed distribution.",
+    "Each full-install implementation has one sequential sample with live network traffic.",
+    "The observed 5.18% full-install reduction does not establish a twofold installation speedup.",
+    "Resolution, downloads, extraction, and installation all contribute to full-install time.",
+    "Host intervals and guest phase durations use different clocks.",
+    "VM concurrency uses identical payloads; distinct-payload isolation relies on host integration tests.",
+    "Matched transport source predates only unexpected-flock-error cleanup; the optimized full install uses final source.",
+    "Active generation resets retain the existing gap between reading the ready marker and reading chunk bytes.",
+    "Both install consoles report an unavailable local relay probe and one HTTP 404; browser-fetch installs and dependency checks succeed.",
+    "This run includes no legacy-path timing comparison.",
+    "This record includes no streaming-experiment result."
+  ]
+}
