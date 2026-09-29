@@ -95,16 +95,31 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
         headers: responseHeaders, url: response.url || url.href });
       if (response.body && request.method !== 'HEAD') {
         reader = response.body.getReader();
+        // Fetch often returns small network fragments. Coalesce them before a
+        // 9p publication so each fragment does not require another guest ACK.
+        // One reusable chunk plus the bounded current browser read are held.
+        const chunk = new Uint8Array(limits.chunkBytes);
+        let filled = 0;
         for (;;) {
           const result = await reader.read();
           check(slot, task);
           if (result.done) break;
           if (result.value.byteLength > limits.readBytes) throw new Error('browser stream chunk exceeds size limit');
-          for (let offset = 0; offset < result.value.byteLength; offset += limits.chunkBytes) {
-            const bytes = result.value.subarray(offset, offset + limits.chunkBytes);
-            await publish(slot, task, { kind: 'chunk', size: bytes.byteLength }, bytes);
-            stats.bytes += bytes.byteLength;
+          for (let offset = 0; offset < result.value.byteLength;) {
+            const copied = Math.min(limits.chunkBytes - filled, result.value.byteLength - offset);
+            chunk.set(result.value.subarray(offset, offset + copied), filled);
+            offset += copied; filled += copied;
+            if (filled === limits.chunkBytes) {
+              await publish(slot, task, { kind: 'chunk', size: filled }, chunk);
+              stats.bytes += filled;
+              // Publication waits for ACK before this buffer can be reused.
+              filled = 0;
+            }
           }
+        }
+        if (filled) {
+          await publish(slot, task, { kind: 'chunk', size: filled }, chunk.subarray(0, filled));
+          stats.bytes += filled;
         }
       }
       await publish(slot, task, { kind: 'done' });
