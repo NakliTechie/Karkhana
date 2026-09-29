@@ -7,29 +7,21 @@ direct URL dependencies declared by packages. No guest TLS is used for PyPI.
 """
 
 import argparse
-from collections import OrderedDict
-from concurrent.futures import Future
-import html
-import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import uuid
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit
 
 
 JSON_TYPE = "application/vnd.pypi.simple.v1+json"
 HTML_TYPE = "application/vnd.pypi.simple.v1+html"
-MAX_PROJECT_BYTES = 16 * 1024 * 1024
 MAX_ENCODED_METADATA_BYTES = 32 * 1024 * 1024
-MAX_METADATA_CACHE_BYTES = 16 * 1024 * 1024
 HTTP_TIMEOUT_SECONDS = 180
-# Keep one URL and metadata permission per wheel. Storing sidecar routes and
-# URLs separately doubled both record count and most registry string storage.
-MAX_REGISTERED_WHEELS = 200_000
 CHUNK_BYTES = 64 * 1024
 NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
 PROJECT_RE = re.compile(rf"{NAME}\Z")
@@ -38,14 +30,6 @@ SPECIFIER = r"(?:===|~=|==|!=|<=|>=|<|>)\s*[A-Za-z0-9*+!._-]+"
 SPECIFIERS = rf"{SPECIFIER}(?:\s*,\s*{SPECIFIER})*"
 REQUIREMENT_RE = re.compile(rf"{NAME}\s*{EXTRAS}\s*(?:{SPECIFIERS}|\(\s*{SPECIFIERS}\s*\))?\s*\Z")
 MARKER_RE = re.compile(r"[A-Za-z0-9_ .<>=!~'\"()\[\],-]+\Z")
-# PyPI's common content-addressed wheel URLs need no generic URL parsing.
-# Exact origin, fixed hexadecimal directories, and an ASCII wheel basename
-# exclude credentials, ports, traversal, percent escapes, and query strings.
-CANONICAL_WHEEL_URL_RE = re.compile(
-    r"https://files\.pythonhosted\.org"
-    r"(/packages/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{60}/([A-Za-z0-9_.!+-]+\.whl))"
-    r"(?:#([A-Za-z0-9_=+-]+))?\Z"
-)
 
 
 class AdapterError(Exception):
@@ -120,8 +104,7 @@ def installer_environment(base_url, environ=None):
         env[key] = env[key.lower()] = base_url
     env["NO_PROXY"] = env["no_proxy"] = ""
     env["UV_CONCURRENT_DOWNLOADS"] = "4"
-    # Cold metadata parsing/rewriting runs under TCG before the first response
-    # byte. Match this bounded useful-work budget instead of uv's 30s default.
+    # Keep a bounded timeout for browser metadata and mailbox backpressure.
     env["UV_HTTP_TIMEOUT"] = str(HTTP_TIMEOUT_SECONDS)
     env["UV_PYTHON_DOWNLOADS"] = "never"
     return env
@@ -145,127 +128,36 @@ def _safe_file_url(url):
     return parsed
 
 
-def _hash_fragment(hashes):
-    if not isinstance(hashes, dict):
-        return ""
-    preferred = "sha256" if "sha256" in hashes else next(iter(hashes), "")
-    return f"{preferred}={hashes[preferred]}" if preferred else ""
-
-
 class PackageIndex:
+    """Forward browser-owned metadata and session-authorized file streams."""
     def __init__(self, fetch):
         self.fetch = fetch
-        self.files = {}
-        self.lock = threading.Lock()
-        self.responses = OrderedDict()
-        self.response_bytes = 0
-        self.pending_responses = {}
+        self.session = uuid.uuid4().hex
+
+    def request(self, operation, base_url, **fields):
+        return {"operation": operation, "session": self.session,
+                "baseUrl": base_url, **fields}
 
     def project_response(self, project, base_url, wants_json):
-        """Share in-flight work and retain encoded bytes within a fixed budget."""
-        key = (project, base_url, wants_json)
-        with self.lock:
-            if key in self.responses:
-                self.responses.move_to_end(key)
-                return self.responses[key]
-            pending = self.pending_responses.get(key)
-            producer = pending is None
-            if producer:
-                pending = Future()
-                self.pending_responses[key] = pending
-        if not producer:
-            return pending.result(timeout=HTTP_TIMEOUT_SECONDS)
-        try:
-            document = self.read_project(project, base_url)
-            if wants_json:
-                response = (JSON_TYPE, json.dumps(document, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
-            else:
-                response = (HTML_TYPE, project_html(document))
-            size = len(response[1])
-            if size > MAX_ENCODED_METADATA_BYTES:
-                raise AdapterError(502, "Encoded PyPI metadata exceeds 32 MiB")
-            # Store before the client write: if uv abandoned that connection,
-            # its retry reuses these bytes without another parse or rewrite.
-            with self.lock:
-                if size <= MAX_METADATA_CACHE_BYTES:
-                    while self.response_bytes + size > MAX_METADATA_CACHE_BYTES:
-                        _, evicted = self.responses.popitem(last=False)
-                        self.response_bytes -= len(evicted[1])
-                    self.responses[key] = response
-                    self.response_bytes += size
-                self.pending_responses.pop(key, None)
-            pending.set_result(response)
-            return response
-        except BaseException as error:
-            with self.lock:
-                self.pending_responses.pop(key, None)
-            pending.set_exception(error)
-            raise
+        return self.fetch("https://pypi.org/simple/" + project + "/", timeout=120,
+                          pypi=self.request("project", base_url, project=project,
+                                            format="json" if wants_json else "html"))
 
-    def rewrite_project(self, project, document, base_url):
-        if not isinstance(document, dict) or not isinstance(document.get("files"), list):
-            raise AdapterError(502, "Invalid PyPI project metadata")
-        result = dict(document)
-        result["files"] = []
-        additions = {}
-        for entry in document["files"]:
-            if not isinstance(entry, dict) or not isinstance(entry.get("filename"), str):
-                raise AdapterError(502, "Invalid file entry in PyPI metadata")
-            filename = entry["filename"]
-            if not filename.endswith(".whl"):
-                continue  # This adapter never offers source distributions.
-            if not isinstance(entry.get("url"), str):
-                raise AdapterError(502, "Missing download URL in PyPI metadata")
-            original = entry["url"]
-            canonical = CANONICAL_WHEEL_URL_RE.fullmatch(original)
-            if canonical:
-                path, advertised_filename, fragment = canonical.groups()
-                clean_url = original.partition("#")[0] if fragment else original
-            else:
-                original = urljoin("https://pypi.org/simple/" + project + "/", original)
-                parsed = _safe_file_url(original)
-                path = parsed.path
-                advertised_filename = unquote(path.rsplit("/", 1)[-1])
-                fragment = parsed.fragment
-                clean_url = urlunsplit(parsed._replace(fragment=""))
-            if advertised_filename != filename:
-                raise AdapterError(502, "Download filename does not match PyPI metadata")
-            route = "/files" + path
-            metadata = entry.get("core-metadata", entry.get("dist-info-metadata", False))
-            additions[route] = (clean_url, bool(metadata))
-            rewritten = dict(entry)
-            fragment = fragment or _hash_fragment(entry.get("hashes"))
-            rewritten["url"] = base_url + route + ("#" + fragment if fragment else "")
-            result["files"].append(rewritten)
-        with self.lock:
-            if (len(self.files) + len(additions) > MAX_REGISTERED_WHEELS
-                    and len(self.files) + len(additions.keys() - self.files.keys()) > MAX_REGISTERED_WHEELS):
-                raise AdapterError(503, "Package metadata exceeds this session's wheel limit")
-            # A prior advertised sidecar stays usable by a cached response in
-            # this session, matching the previous separate-route registry.
-            for route in self.files.keys() & additions.keys():
-                if self.files[route][1] and not additions[route][1]:
-                    additions[route] = (additions[route][0], True)
-            self.files.update(additions)
-        return result
+    def file_response(self, path, base_url, head):
+        return self.fetch("https://files.pythonhosted.org" + path[len("/files"):],
+                          method="HEAD" if head else "GET", timeout=120,
+                          pypi=self.request("file", base_url, path=path))
 
-    def read_project(self, project, base_url):
-        url = "https://pypi.org/simple/" + project + "/"
-        with self.fetch(url, headers=[["Accept", JSON_TYPE]], timeout=120) as response:
-            self.check_status(response.status)
-            final = urlsplit(response.url)
-            if final.scheme != "https" or final.netloc != "pypi.org" or final.path != "/simple/" + project + "/":
-                raise AdapterError(403, "Blocked PyPI metadata redirect")
-            data = bytearray()
-            for chunk in response.iter_chunks():
-                if len(data) + len(chunk) > MAX_PROJECT_BYTES:
-                    raise AdapterError(502, "PyPI project metadata exceeds 16 MiB")
-                data.extend(chunk)
+    def close(self, base_url):
+        # Explicit release is best-effort if the browser vanished. Its bounded
+        # idle expiry also reclaims abandoned sessions after guest termination.
         try:
-            document = json.loads(data)
-        except (ValueError, UnicodeDecodeError):
-            raise AdapterError(502, "PyPI did not return valid JSON metadata") from None
-        return self.rewrite_project(project, document, base_url)
+            with self.fetch("https://pypi.org/", timeout=5,
+                            pypi=self.request("close", base_url)) as response:
+                for _ in response.iter_chunks():
+                    pass
+        except Exception:
+            pass
 
     @staticmethod
     def check_status(status):
@@ -275,33 +167,6 @@ class PackageIndex:
             raise AdapterError(403, "PyPI refused this request")
         if status != 200:
             raise AdapterError(502, "PyPI request failed with HTTP " + str(status))
-
-    def file_url(self, path):
-        sidecar = path.endswith(".metadata")
-        route = path.removesuffix(".metadata") if sidecar else path
-        with self.lock:
-            record = self.files.get(route)
-        if record is None or (sidecar and not record[1]):
-            raise AdapterError(403, "Download was not advertised by this session's PyPI index")
-        return record[0] + ".metadata" if sidecar else record[0]
-
-
-def project_html(document):
-    version = html.escape(str(document.get("meta", {}).get("api-version", "1.0")), quote=True)
-    parts = [f'<!doctype html><html><head><meta name="pypi:repository-version" content="{version}"></head><body>']
-    for entry in document["files"]:
-        attributes = {"href": entry["url"]}
-        if entry.get("requires-python") is not None:
-            attributes["data-requires-python"] = entry["requires-python"]
-        if entry.get("yanked") is True or isinstance(entry.get("yanked"), str):
-            attributes["data-yanked"] = entry["yanked"] if isinstance(entry["yanked"], str) else ""
-        for key in ("core-metadata", "dist-info-metadata"):
-            if entry.get(key):
-                attributes["data-" + key] = _hash_fragment(entry[key]) if isinstance(entry[key], dict) else "true"
-        attrs = " ".join(f'{key}="{html.escape(str(value), quote=True)}"' for key, value in attributes.items())
-        parts.append(f'<a {attrs}>{html.escape(entry["filename"])}</a>')
-    parts.append("</body></html>")
-    return "\n".join(parts).encode("utf-8")
 
 
 class IndexServer(ThreadingHTTPServer):
@@ -385,16 +250,16 @@ class IndexHandler(BaseHTTPRequestHandler):
             if path.startswith("/simple/"):
                 name = path[len("/simple/"):].removesuffix("/")
                 project = normalize_project(name)
-                content_type, body = self.server.index.project_response(
-                    project, self.server.base_url, JSON_TYPE in self.headers.get("Accept", ""))
-                self.send_response(200)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Connection", "close")
-                self.end_headers()
-                self.response_started = True
-                if not head:
-                    self.wfile.write(body)
+                wants_json = JSON_TYPE in self.headers.get("Accept", "")
+                with self.server.index.project_response(project, self.server.base_url, wants_json) as response:
+                    self.server.index.check_status(response.status)
+                    if response.url != "https://pypi.org/simple/" + project + "/":
+                        raise AdapterError(403, "Blocked PyPI metadata redirect")
+                    self.send_response(200)
+                    self.send_header("Content-Type", JSON_TYPE if wants_json else HTML_TYPE)
+                    self.begin_stream(head)
+                    if not head:
+                        self.write_stream(response, MAX_ENCODED_METADATA_BYTES)
             elif path.startswith("/files/"):
                 self.stream_file(path, head)
             else:
@@ -411,16 +276,17 @@ class IndexHandler(BaseHTTPRequestHandler):
                     self.fail(504, "Browser fetch timed out")
                 elif isinstance(error, PermissionError) or code in ("blocked", "BLOCKED"):
                     self.fail(403, "Browser fetch blocked this request")
+                elif code == "capacity":
+                    self.fail(503, "Browser PyPI metadata exceeds session capacity")
                 elif isinstance(error, FileNotFoundError):
                     self.fail(404, "Browser fetch resource is missing")
                 else:
                     self.fail(502, "Browser fetch failed; check that the Karkhana bridge is running")
 
     def stream_file(self, path, head):
-        url = self.server.index.file_url(path)
         # Deliberately ignore Range: uv can fall back to a full 200 response.
-        # Browser fetch decodes HTTP bodies; encoded lengths are not usable.
-        with self.server.index.fetch(url, method="HEAD" if head else "GET", timeout=120) as response:
+        # The browser authorizes this exact route against this install session.
+        with self.server.index.file_response(path, self.server.base_url, head) as response:
             self.server.index.check_status(response.status)
             _safe_file_url(response.url)
             self.send_response(200)
@@ -428,21 +294,30 @@ class IndexHandler(BaseHTTPRequestHandler):
                 if key.lower() in ("content-type", "etag", "last-modified", "cache-control"):
                     if not any(character in str(value) for character in "\r\n"):
                         self.send_header(key, value)
-            self.send_header("Connection", "close")
+            self.begin_stream(head)
             if not head:
-                self.send_header("Transfer-Encoding", "chunked")
-            self.end_headers()
-            self.response_started = True
-            if not head:
-                for chunk in response.iter_chunks():
-                    for offset in range(0, len(chunk), CHUNK_BYTES):
-                        part = chunk[offset:offset + CHUNK_BYTES]
-                        self.wfile.write(f"{len(part):X}\r\n".encode("ascii"))
-                        self.wfile.write(part)
-                        self.wfile.write(b"\r\n")
-                # A bridge failure before this terminator produces an invalid
-                # HTTP body, even when an upstream metadata file has no hash.
-                self.wfile.write(b"0\r\n\r\n")
+                self.write_stream(response)
+
+    def begin_stream(self, head):
+        self.send_header("Connection", "close")
+        if not head:
+            self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        self.response_started = True
+
+    def write_stream(self, response, maximum=None):
+        size = 0
+        for chunk in response.iter_chunks():
+            size += len(chunk)
+            if maximum is not None and size > maximum:
+                raise AdapterError(502, "Encoded PyPI metadata exceeds 32 MiB")
+            for offset in range(0, len(chunk), CHUNK_BYTES):
+                part = chunk[offset:offset + CHUNK_BYTES]
+                self.wfile.write(f"{len(part):X}\r\n".encode("ascii"))
+                self.wfile.write(part)
+                self.wfile.write(b"\r\n")
+        # Only a successful bridge EOF permits the HTTP chunk terminator.
+        self.wfile.write(b"0\r\n\r\n")
 
     def fail(self, status, message):
         body = ("kpip-fast: " + message + "\n").encode("utf-8")
@@ -480,6 +355,7 @@ def main(argv=None):
         finally:
             server.shutdown()
             thread.join()
+            server.index.close(server.base_url)
 
 
 if __name__ == "__main__":

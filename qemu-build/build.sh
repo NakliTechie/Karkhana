@@ -33,7 +33,7 @@ ls -la "$OUT"
 
 echo "==> Installing Karkhana console page + vendored terminal assets…"
 cp "$(pwd)/karkhana.html" "$OUT/karkhana.html"
-cp "$(pwd)/net/browser-fetch.js" "$OUT/browser-fetch.js"
+cp "$(pwd)/net/browser-fetch.js" "$(pwd)/net/pypi-metadata.js" "$OUT/"
 cp "$(pwd)/guest/kfetch.py" "$(pwd)/guest/kpip_fast.py" "$OUT/"
 # rm first: cp -R into an existing dir nests it (vendor/vendor) on every rebuild.
 rm -rf "$OUT/vendor" && cp -R "$(pwd)/vendor" "$OUT/vendor"

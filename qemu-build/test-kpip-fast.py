@@ -83,14 +83,21 @@ class FakeFetch:
         self.stream_failure = None
         self.redirect = None
 
-    def __call__(self, url, headers=None, method="GET", timeout=120):
-        self.requests.append((url, headers, method, timeout))
+    def __call__(self, url, headers=None, method="GET", timeout=120, pypi=None):
+        self.requests.append((url, headers, method, timeout, pypi))
         if self.failure:
             raise self.failure
         if url.startswith("https://pypi.org/simple/"):
-            chunks = [json.dumps(self.project).encode()]
+            # The browser has already encoded these bytes. HTTP tests verify
+            # transparent forwarding; browser suites exercise transformation.
+            document = copy.deepcopy(self.project)
+            document["files"] = [document["files"][0]]
+            document["files"][0]["url"] = pypi["baseUrl"] + "/files" + urlsplit(WHEEL_URL).path
+            chunks = [json.dumps(document).encode()] if pypi["format"] == "json" else [b'<html><a data-requires-python=">=3.9">wheel</a></html>']
             response_headers = [["Content-Type", adapter.JSON_TYPE]]
         else:
+            if pypi["operation"] == "file" and url not in (WHEEL_URL, WHEEL_URL + ".metadata"):
+                raise bridge.BridgeError("unadvertised", "blocked")
             chunks = self.content
             response_headers = [["Content-Type", "application/octet-stream"],
                                 ["Content-Length", "37"], ["Content-Encoding", "gzip"],
@@ -98,177 +105,6 @@ class FakeFetch:
         response = FakeResponse(self.redirect or url, chunks, self.status, response_headers, self.stream_failure)
         self.responses.append(response)
         return response
-
-
-class MetadataTests(unittest.TestCase):
-    def setUp(self):
-        self.index = adapter.PackageIndex(FakeFetch())
-        self.base = "http://127.0.0.1:12345"
-
-    def test_json_preserves_hashes_metadata_and_constraints(self):
-        result = self.index.rewrite_project("example-pkg", PROJECT, self.base)
-        self.assertEqual(len(result["files"]), 1)
-        original = PROJECT["files"][0]
-        rewritten = result["files"][0]
-        self.assertEqual({key: value for key, value in original.items() if key != "url"},
-                         {key: value for key, value in rewritten.items() if key != "url"})
-        self.assertEqual(urlsplit(rewritten["url"]).fragment, "sha256=" + WHEEL_HASH)
-        route = urlsplit(rewritten["url"]).path
-        self.assertEqual(self.index.file_url(route), WHEEL_URL)
-        self.assertEqual(self.index.file_url(route + ".metadata"), WHEEL_URL + ".metadata")
-        self.assertEqual(PROJECT["files"][0]["url"], WHEEL_URL + "#sha256=" + WHEEL_HASH)
-
-    def test_html_escapes_and_preserves_install_selection_metadata(self):
-        result = self.index.rewrite_project("example-pkg", PROJECT, self.base)
-        body = adapter.project_html(result).decode()
-        self.assertIn('data-requires-python="&gt;=3.9,&lt;4"', body)
-        self.assertIn('data-yanked="use &quot;1.3&quot; instead"', body)
-        self.assertIn('data-core-metadata="sha256=' + METADATA_HASH + '"', body)
-        self.assertIn('data-dist-info-metadata="sha256=' + METADATA_HASH + '"', body)
-        self.assertIn("#sha256=" + WHEEL_HASH, body)
-        self.assertNotIn("tar.gz", body)
-
-    def test_json_hash_becomes_html_fragment_when_original_has_none(self):
-        project = copy.deepcopy(PROJECT)
-        project["files"][0]["url"] = WHEEL_URL
-        result = self.index.rewrite_project("example-pkg", project, self.base)
-        self.assertTrue(result["files"][0]["url"].endswith("#sha256=" + WHEEL_HASH))
-
-    def test_empty_yanked_reason_keeps_the_html_attribute(self):
-        project = copy.deepcopy(PROJECT)
-        project["files"][0]["yanked"] = ""
-        result = self.index.rewrite_project("example-pkg", project, self.base)
-        self.assertIn(b'data-yanked=""', adapter.project_html(result))
-
-    def test_canonical_wheels_skip_generic_url_work_and_preserve_fragments(self):
-        canonical_url = "https://files.pythonhosted.org/packages/ab/cd/" + "e" * 60 + "/" + WHEEL_NAME
-        for fragment in ("", "#sha256=" + WHEEL_HASH):
-            with self.subTest(fragment=fragment):
-                project = copy.deepcopy(PROJECT)
-                project["files"][0]["url"] = canonical_url + fragment
-                with (mock.patch.object(adapter, "urljoin", side_effect=AssertionError("unexpected generic join")),
-                      mock.patch.object(adapter, "_safe_file_url", side_effect=AssertionError("unexpected generic parse")),
-                      mock.patch.object(adapter, "urlunsplit", side_effect=AssertionError("unexpected generic serialization"))):
-                    result = self.index.rewrite_project("example-pkg", project, self.base)
-                rewritten = result["files"][0]
-                self.assertEqual(urlsplit(rewritten["url"]).fragment, "sha256=" + WHEEL_HASH)
-                route = urlsplit(rewritten["url"]).path
-                self.assertEqual(self.index.file_url(route), canonical_url)
-                self.assertEqual(self.index.file_url(route + ".metadata"), canonical_url + ".metadata")
-
-    def test_noncanonical_allowed_urls_keep_strict_fallback(self):
-        for url in (WHEEL_URL.replace("https://", "//"),
-                    WHEEL_URL.replace(".org/", ".org:443/"),
-                    WHEEL_URL.replace("example_pkg", "example%5fpkg")):
-            with self.subTest(url=url):
-                project = copy.deepcopy(PROJECT)
-                project["files"][0]["url"] = url
-                with mock.patch.object(adapter, "_safe_file_url", wraps=adapter._safe_file_url) as validate:
-                    result = self.index.rewrite_project("example-pkg", project, self.base)
-                validate.assert_called_once()
-                route = urlsplit(result["files"][0]["url"]).path
-                expected = "https:" + url if url.startswith("//") else url
-                self.assertEqual(self.index.file_url(route), expected)
-                self.assertEqual(self.index.file_url(route + ".metadata"), expected + ".metadata")
-
-    def test_metadata_route_requires_advertisement(self):
-        project = copy.deepcopy(PROJECT)
-        project["files"][0].pop("core-metadata")
-        project["files"][0].pop("dist-info-metadata")
-        result = self.index.rewrite_project("example-pkg", project, self.base)
-        with self.assertRaises(adapter.AdapterError):
-            self.index.file_url(urlsplit(result["files"][0]["url"]).path + ".metadata")
-
-    def test_sidecar_uses_one_wheel_record_and_exact_advertised_route(self):
-        with mock.patch.object(adapter, "MAX_REGISTERED_WHEELS", 1):
-            result = self.index.rewrite_project("example-pkg", PROJECT, self.base)
-        route = urlsplit(result["files"][0]["url"]).path
-        self.assertEqual(len(self.index.files), 1)
-        self.assertEqual(self.index.file_url(route), WHEEL_URL)
-        self.assertEqual(self.index.file_url(route + ".metadata"), WHEEL_URL + ".metadata")
-        for forbidden in (route + ".metadata.metadata", route + ".metadata/",
-                          route.replace("/123/", "/unadvertised/") + ".metadata",
-                          route + "%2emetadata"):
-            with self.subTest(path=forbidden):
-                with self.assertRaises(adapter.AdapterError) as caught:
-                    self.index.file_url(forbidden)
-                self.assertEqual(caught.exception.status, 403)
-
-    def test_false_metadata_permission_rejects_sidecar_but_allows_wheel(self):
-        project = copy.deepcopy(PROJECT)
-        project["files"][0]["core-metadata"] = False
-        result = self.index.rewrite_project("example-pkg", project, self.base)
-        route = urlsplit(result["files"][0]["url"]).path
-        self.assertEqual(self.index.file_url(route), WHEEL_URL)
-        with self.assertRaises(adapter.AdapterError) as caught:
-            self.index.file_url(route + ".metadata")
-        self.assertEqual(caught.exception.status, 403)
-
-    def test_cached_advertised_sidecar_survives_a_later_false_flag(self):
-        result = self.index.rewrite_project("example-pkg", PROJECT, self.base)
-        route = urlsplit(result["files"][0]["url"]).path
-        project = copy.deepcopy(PROJECT)
-        project["files"][0]["core-metadata"] = False
-        self.index.rewrite_project("example-pkg", project, self.base)
-        self.assertEqual(len(self.index.files), 1)
-        self.assertEqual(self.index.file_url(route + ".metadata"), WHEEL_URL + ".metadata")
-
-    def test_external_origins_credentials_traversal_and_query_are_blocked(self):
-        for url in (
-            "https://evil.example/packages/" + WHEEL_NAME,
-            "http://files.pythonhosted.org/packages/" + WHEEL_NAME,
-            "https://files.pythonhosted.org.evil.example/packages/" + WHEEL_NAME,
-            "https://secret@files.pythonhosted.org/packages/" + WHEEL_NAME,
-            "https://files.pythonhosted.org:8443/packages/" + WHEEL_NAME,
-            "https://files.pythonhosted.org/private/" + WHEEL_NAME,
-            "https://files.pythonhosted.org/packages/%2e%2e/" + WHEEL_NAME,
-            WHEEL_URL + "?token=secret",
-        ):
-            with self.subTest(url=url):
-                project = copy.deepcopy(PROJECT)
-                project["files"][0]["url"] = url
-                with self.assertRaises(adapter.AdapterError) as caught:
-                    self.index.rewrite_project("example-pkg", project, self.base)
-                self.assertEqual(caught.exception.status, 403)
-        self.assertEqual(self.index.files, {})
-
-    def test_registration_limit_is_checked_before_mutation(self):
-        project = copy.deepcopy(PROJECT)
-        second = copy.deepcopy(project["files"][0])
-        second["url"] = WHEEL_URL.replace("/123/", "/456/")
-        project["files"].append(second)
-        with mock.patch.object(adapter, "MAX_REGISTERED_WHEELS", 1):
-            with self.assertRaises(adapter.AdapterError) as caught:
-                self.index.rewrite_project("example-pkg", project, self.base)
-        self.assertEqual(caught.exception.status, 503)
-        self.assertEqual(self.index.files, {})
-
-    def test_registration_limit_counts_repeated_project_files_once(self):
-        with mock.patch.object(adapter, "MAX_REGISTERED_WHEELS", 1):
-            self.index.rewrite_project("example-pkg", PROJECT, self.base)
-            self.index.rewrite_project("example-pkg", PROJECT, self.base)
-            self.assertEqual(len(self.index.files), 1)
-            other = copy.deepcopy(PROJECT)
-            other["files"][0]["url"] = WHEEL_URL.replace("/123/", "/456/")
-            with self.assertRaises(adapter.AdapterError) as caught:
-                self.index.rewrite_project("example-pkg", other, self.base)
-        self.assertEqual(caught.exception.status, 503)
-        self.assertEqual(len(self.index.files), 1)
-
-    def test_over_capacity_update_preserves_existing_sidecar_permission(self):
-        with mock.patch.object(adapter, "MAX_REGISTERED_WHEELS", 1):
-            result = self.index.rewrite_project("example-pkg", PROJECT, self.base)
-            route = urlsplit(result["files"][0]["url"]).path
-            project = copy.deepcopy(PROJECT)
-            project["files"][0]["core-metadata"] = False
-            extra = copy.deepcopy(project["files"][0])
-            extra["url"] = WHEEL_URL.replace("/123/", "/456/")
-            project["files"].append(extra)
-            with self.assertRaises(adapter.AdapterError) as caught:
-                self.index.rewrite_project("example-pkg", project, self.base)
-        self.assertEqual(caught.exception.status, 503)
-        self.assertEqual(len(self.index.files), 1)
-        self.assertEqual(self.index.file_url(route + ".metadata"), WHEEL_URL + ".metadata")
 
 
 class HTTPTests(unittest.TestCase):
@@ -304,7 +140,10 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], adapter.JSON_TYPE)
         self.assertEqual(json.loads(body)["name"], "example-pkg")
         self.assertEqual(self.fetch.requests[0][0], "https://pypi.org/simple/example-pkg/")
-        self.assertEqual(self.fetch.requests[0][1], [["Accept", adapter.JSON_TYPE]])
+        self.assertIsNone(self.fetch.requests[0][1])
+        self.assertEqual(self.fetch.requests[0][4], {
+            "operation": "project", "session": self.index.session,
+            "baseUrl": self.server.base_url, "project": "example-pkg", "format": "json"})
         status, headers, body = self.request("/simple/example-pkg/")
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], adapter.HTML_TYPE)
@@ -385,7 +224,7 @@ class HTTPTests(unittest.TestCase):
         ):
             status, _response_headers, _body = self.request(target, headers=headers)
             self.assertEqual(status, expected)
-        self.assertEqual(self.fetch.requests, [])
+        self.assertEqual(len(self.fetch.requests), 1)  # Browser rejects the unadvertised route.
 
     def test_missing_blocked_network_and_timeout_are_distinct(self):
         for status, expected in ((404, 404), (403, 403), (500, 502)):
@@ -400,13 +239,13 @@ class HTTPTests(unittest.TestCase):
             self.assertNotIn(b"secret diagnostic", body)
 
     def test_project_size_limit_cancels_bridge_response(self):
-        with mock.patch.object(adapter, "MAX_PROJECT_BYTES", 20):
-            status, _headers, _body = self.request("/simple/example-pkg/")
-        self.assertEqual(status, 502)
+        with mock.patch.object(adapter, "MAX_ENCODED_METADATA_BYTES", 20):
+            with self.assertRaises(http.client.IncompleteRead):
+                self.request("/simple/example-pkg/")
         self.assertTrue(self.fetch.responses[-1].closed)
 
     def test_real_bridge_error_codes_map_to_http_status(self):
-        for code, expected in (("blocked", 403), ("timeout", 504), ("network", 502), ("cancelled", 502)):
+        for code, expected in (("blocked", 403), ("timeout", 504), ("network", 502), ("cancelled", 502), ("capacity", 503)):
             self.fetch.failure = bridge.BridgeError("private diagnostic", code=code)
             actual, _headers, body = self.request("/simple/example-pkg/")
             self.assertEqual(actual, expected)

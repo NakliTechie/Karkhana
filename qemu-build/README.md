@@ -112,7 +112,7 @@ No external guest TCP or guest TLS participates in those downloads.
 The page stages `kfetch.py` and `kpip_fast.py` into `/persist/.karkhana-net`
 before boot. `/pack/info` adds their wrappers to the guest's PATH. Existing
 engine snapshots therefore need no rebuild. `build.sh`, `chunk.sh`, and
-`publish.sh` carry all three new assets on subsequent rebuilds.
+`publish.sh` carry the bridge, metadata processor, and Python assets on subsequent rebuilds.
 
 `net/browser-fetch.js` implements four preallocated mailbox slots. Each slot
 holds one request and one response chunk, capped at 256 KiB. A generation,
@@ -130,28 +130,39 @@ URL credentials, and unsupported headers. The BYOK hostname cannot enter this
 path. Fetch decodes HTTP content encoding; the adapter drops those wire
 headers and supplies its own chunked response framing.
 
-The adapter rewrites PyPI file URLs while preserving hashes, Python version
+The browser rewrites PyPI file URLs while preserving hashes, Python version
 requirements, yanked markers, and advertised wheel metadata. It offers only
 wheels. Installer config and proxy overrides cannot select another index.
 An explicit loopback proxy rejects external HTTP targets and HTTPS CONNECT.
 The existing `kpip`, npm, relay, and gvisor paths remain available.
 
-Canonical PyPI wheel URLs use a restricted validation path to avoid repeated
-generic URL parsing under TCG. Other URLs retain full validation. Concurrent
-requests for the same project share metadata processing. Encoded responses
-use a 16 MiB session cache, avoiding repeated parsing and serialization on
-retries. Individual encoded responses are capped at 32 MiB.
+`net/pypi-metadata.js` fetches and parses project JSON in the browser. It
+validates wheel URLs before URL normalization can remove traversal segments.
+It encodes JSON or HTML once. The guest forwards these encoded bytes without
+parsing, rewriting, serializing, or retaining the project document.
 
-The registry holds at most 200,000 advertised wheel records. Each stores one
-URL and its metadata permission. Sidecar URLs derive from those records,
-avoiding duplicate route and URL strings. The previous 100,000-route limit
-counted sidecars separately and rejected the tested 108-package dependency graph.
-Larger graphs still fail explicitly when they exceed the wheel-record cap.
+Each install creates a random session bound to its exact loopback origin.
+Wheel downloads require an exact advertised route within that session.
+Sidecars require the advertised metadata permission. Cached responses retain
+hashes, Python requirements, yanked values, and both metadata attributes.
+Concurrent requests for one session, project, and format share processing.
+Cancelling one caller leaves the other callers running. Cancelling every
+caller aborts the shared upstream request.
 
-The adapter sets uv's HTTP timeout to 180 seconds. Guest metadata processing
-can exceed uv's default 30 seconds before sending its first response byte.
-Browser transfers retain their separate 120-second timeout. These bounds
-allow useful processing while retaining explicit failure for stalled requests.
+A browser-wide LRU cache holds at most 16 MiB across 128 encoded responses.
+Input documents are capped at 16 MiB; encoded responses are capped at 32 MiB.
+The browser permits eight sessions, 200,000 wheel records per session,
+400,000 records overall, and a 128 MiB estimated registry storage budget.
+Oversized requests fail before adding wheel permissions.
+
+The adapter explicitly closes its session after uv exits, including failure.
+Close aborts active work and releases its cache and wheel permissions.
+Abandoned sessions expire after ten idle minutes; the bridge sweeps every
+30 seconds. Active requests prevent idle expiry. Bridge stop clears all
+sessions. Late completions cannot recreate closed session state.
+
+The adapter sets uv's HTTP timeout to 180 seconds. Browser requests retain
+separate 120-second total timeouts, including mailbox backpressure.
 
 Limits: source builds, private indexes, requirement files, direct URL/VCS
 dependencies, npm, and arbitrary origins are unsupported. CORS still applies.
@@ -168,6 +179,7 @@ Host checks require Node and Python, without an engine rebuild:
 
 ```bash
 node qemu-build/test-browser-fetch.mjs
+node qemu-build/test-pypi-metadata.mjs
 python3 qemu-build/test-kpip-fast.py
 python3 qemu-build/test-kpip-cache.py
 node qemu-build/test-pty.mjs
@@ -176,7 +188,12 @@ node qemu-build/test-pty.mjs
 The first suite includes the actual Python adapter and client against the JS
 bridge. A disposable browser run must additionally verify 9p visibility,
 runtime PATH, real CORS responses, a package install, and post-install liveness.
-Inspect `karkhana.net.directFetch` for transfer counters.
+Inspect `karkhana.net.directFetch` for transfer and metadata counters.
+
+`node qemu-build/profile-pypi-metadata.mjs` profiles a deterministic 10,424-wheel
+fixture on the host. Add `--fixture` to emit its JSON for browser or guest
+replays. `fixtures/pypi-project.mjs` also exports the fixture for browser use.
+These CPU profiles do not measure package-install speed.
 
 ## Persistence
 
