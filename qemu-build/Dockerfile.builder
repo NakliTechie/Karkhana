@@ -793,9 +793,12 @@ ARG VM_CORE_NUMS
 ARG QEMU_MIGRATION
 RUN apt-get update && apt-get install -y gettext-base && mkdir /out
 COPY --link --from=assets /config/qemu/args-x86_64.json.template /args.json.template
-# Karkhana carried patch: modern CPU features (SSE4/AVX2 via TCG) so Bun/Go/Rust
-# release binaries run; default qemu64 model is SSE2-era and traps them.
-RUN true # cpu-model patch parked: qemu64 default; max panics, Nehalem hangs on wasm TCG
+# Keep native snapshot creation and browser restoration on the same CPU model.
+# x86-64-v2 supports Bun's Nehalem baseline. AES/PCLMUL expose guest TLS crypto.
+# POPCNT requires the wasm backend correction below; default qemu64 lacks it.
+RUN test "$(grep -o '"-nographic",' /args.json.template | wc -l)" -eq 1 && \
+    ! grep -q '"-cpu"' /args.json.template && \
+    sed -i 's/"-nographic",/"-cpu", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16,+aes,+pclmulqdq", "-nographic",/' /args.json.template
 RUN sed -i 's/security_model=passthrough,id=wasi0/security_model=none,id=wasi0/' /args.json.template
 RUN sed -i 's/"-nographic",/"-object", "rng-builtin,id=rng0", "-device", "virtio-rng-pci,rng=rng0", "-nographic",/' /args.json.template
 RUN MIGRATION_FLAGS= ; \
@@ -910,6 +913,29 @@ RUN if test "${QEMU_MIGRATION}" = "true"  ; then /get-qemu-state -output=/pack/v
 
 FROM qemu-emscripten-dev AS qemu-emscripten-dev-amd64
 ARG LOAD_MODE
+# Karkhana: wasm POPCNT operands and result type.
+# ctpop has one output and one input. The original operand indexes corrupt
+# registers when Go selects POPCNT, killing init before the container starts.
+# All Wasm register globals hold i64, including zero-extended i32 results.
+RUN python3 - <<'PY'
+from pathlib import Path
+p = Path('/qemu/tcg/wasm32/tcg-target.c.inc')
+s = p.read_text()
+patches = {
+    'tcg_out_ctpop_i32(s, opc, args[1], args[2]);':
+        'tcg_out_ctpop_i32(s, opc, args[0], args[1]);',
+    'tcg_out_ctpop_i64(s, opc, args[1], args[2]);':
+        'tcg_out_ctpop_i64(s, opc, args[0], args[1]);',
+    '    tcg_wasm_out_op_i32_popcnt(s);\n    tcg_wasm_out_op_global_set_r(s, dest);':
+        '    tcg_wasm_out_op_i32_popcnt(s);\n'
+        '    tcg_wasm_out_op_i64_extend_i32_u(s);\n'
+        '    tcg_wasm_out_op_global_set_r(s, dest);',
+}
+for old, new in patches.items():
+    assert s.count(old) == 1, f'POPCNT patch drift: {old}'
+    s = s.replace(old, new)
+p.write_text(s)
+PY
 RUN EXTRA_CFLAGS="-O3 -g -Wno-error=unused-command-line-argument -Wno-error=unused-but-set-variable -matomics -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -pthread -sPROXY_TO_PTHREAD=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sTOTAL_MEMORY=$((3000*1024*1024)) -sWASM_BIGINT -sMALLOC=emmalloc -sEXPORT_ES6=1 -sASYNCIFY_IMPORTS=ffi_call_js $XTERM_PTY_CFLAGS " ; \
     emconfigure ../configure --static --target-list=x86_64-softmmu --cpu=wasm32 --cross-prefix= \
     --without-default-features --enable-system --with-coroutine=fiber --enable-virtfs \
