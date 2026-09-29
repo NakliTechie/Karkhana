@@ -102,7 +102,7 @@ test('four Python clients stream isolated bytes while a fifth waits for a free s
     let offset = 0, released = false;
     return { status: 200, url, headers: new Headers(), body: { getReader: () => ({
       async read() {
-        // Hold every stream after one acknowledged chunk. All first four
+        // Hold every stream after its first browser fragment. All first four
         // consumers own live slots before the fifth process enters the CLI.
         if (offset && !released) {
           blocked.add(client);
@@ -192,11 +192,54 @@ test('headers and each bounded chunk require acknowledgement before reading ahea
   assert.equal(reads, 2);
 });
 
+test('small browser fragments coalesce into bounded binary chunks without reading past an unacknowledged chunk', async t => {
+  const fragmentBytes = 23017;
+  const payload = Buffer.alloc(FETCH_LIMITS.chunkBytes * 3 + 317);
+  for (let i = 0; i < payload.length; i++) payload[i] = ((i * 37) ^ (i >>> 8)) & 255;
+  let offset = 0, reads = 0;
+  const f = fixture(t, async () => ({ status: 200, headers: new Headers(), body: {
+    getReader: () => ({
+      read: async () => {
+        reads++;
+        if (offset === payload.length) return { done: true };
+        const end = Math.min(offset + fragmentBytes, payload.length);
+        const value = payload.subarray(offset, end);
+        offset = end;
+        return { done: false, value };
+      },
+      cancel: async () => {},
+    }),
+  } }));
+  f.request();
+  await until(() => f.frame()?.kind === 'headers');
+  assert.equal(reads, 0);
+  f.write('ack', `${token}:0`);
+  await until(() => f.frame()?.kind === 'chunk');
+  assert.equal(f.frame().size, FETCH_LIMITS.chunkBytes);
+  assert.equal(reads, Math.ceil(FETCH_LIMITS.chunkBytes / fragmentBytes));
+  const firstReads = reads;
+  await sleep(30);
+  assert.equal(reads, firstReads, 'a full unacknowledged chunk stops upstream reads');
+  const chunks = [];
+  for (let seq = 1; seq <= 4; seq++) {
+    const frame = await until(() => f.frame()?.seq === seq && f.frame());
+    assert.equal(frame.kind, 'chunk');
+    assert.equal(frame.size, seq === 4 ? 317 : FETCH_LIMITS.chunkBytes);
+    chunks.push(readFileSync(f.path('chunk')));
+    f.write('ack', `${token}:${seq}`);
+  }
+  const done = await until(() => f.frame()?.kind === 'done' && f.frame());
+  assert.equal(done.seq, 5, 'many browser reads require only four guest chunk ACKs');
+  assert.deepEqual(Buffer.concat(chunks), payload);
+  assert.equal(reads, Math.ceil(payload.length / fragmentBytes) + 1);
+  assert.equal(f.bridge.status.bytes, payload.length);
+});
+
 test('a mid-stream failure leaves an existing output intact and returns nonzero', async t => {
   let reads = 0;
   const f = fixture(t, async () => ({ status: 200, headers: new Headers(),
     body: { getReader: () => ({ read: async () => {
-      if (++reads === 1) return { value: new Uint8Array([0, 255, 1]), done: false };
+      if (++reads === 1) return { value: new Uint8Array(FETCH_LIMITS.chunkBytes + 3).fill(128), done: false };
       throw new Error('connection lost');
     }, cancel: async () => {} }) } }));
   const output = join(f.directory, 'result.whl');

@@ -117,6 +117,8 @@ engine snapshots therefore need no rebuild. `build.sh`, `chunk.sh`, and
 `net/browser-fetch.js` implements four preallocated mailbox slots. Each slot
 holds one request and one response chunk, capped at 256 KiB. A generation,
 request ID, and sequence number bind every publication and acknowledgement.
+Small browser fragments combine into full chunks before publication. Only
+the final chunk may be shorter, avoiding an acknowledgement per network fragment.
 The browser waits for an acknowledgement before advancing the stream.
 Cancellation and total timeouts abort browser requests. Truncated transfers
 produce errors, never a successful EOF. `kfetch -o FILE` replaces its output
