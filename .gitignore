@@ -51,6 +51,7 @@ qemu-build/*
 !qemu-build/test-pty.mjs
 !qemu-build/test-browser-fetch.mjs
 !qemu-build/test-kpip-fast.py
+!qemu-build/test-kpip-cache.py
 !qemu-build/karkhana-sw.js
 !qemu-build/guest/
 qemu-build/guest/*
