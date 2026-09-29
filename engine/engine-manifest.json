@@ -14,15 +14,15 @@
    "qemu-system-x86_64.data.partak",
    "qemu-system-x86_64.data.partal"
   ],
-  "size": 249372803,
-  "sha256": "09f3f293688c9d2db82e01fcdcbd426274b500b8613de0f0a4023741d085fe0a"
+  "size": 247959038,
+  "sha256": "bc38bfd67a901fa36509dd9f97d7c54438c0e5f10833068497192ee041cbbd3c"
  },
  "qemu-system-x86_64.wasm": {
   "parts": [
    "qemu-system-x86_64.wasm.partaa",
    "qemu-system-x86_64.wasm.partab"
   ],
-  "size": 41244157,
-  "sha256": "66b2d7563f04fd6ca92025d22424e3c57a1e1b9fde54635c148cfb3b8d5c4218"
+  "size": 41244456,
+  "sha256": "71145727165c50786c69bdb836481dfb09acfbe0cdb5e627112e01d3b7c6fd4c"
  }
 }

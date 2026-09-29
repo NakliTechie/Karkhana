@@ -173,7 +173,27 @@ On September 29, paired downloads used fresh query strings for the same
 18,252,005-byte NumPy wheel. Direct transfers took 15.98 and 16.14 guest
 seconds; legacy curl took 15.61 and 15.51. All four downloads matched SHA-256
 `666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5`.
-These samples demonstrate no speedup.
+These raw-download samples demonstrate no speedup.
+
+On September 29, fresh full `aider-chat==0.86.2` installations used the same
+engine and identical package versions. The command suffix was
+`--no-cache --reinstall aider-chat==0.86.2`.
+
+| Path | Host install seconds | Guest resolver seconds |
+|---|---:|---:|
+| Previous `kpip-fast` | 819.997 | 477 |
+| Browser metadata `kpip-fast` | 341.005 | 124 |
+| Legacy `kpip` | 436.010 | 144 |
+
+All three passed dependency and terminal checks. The optimized run closed
+all metadata sessions and released its registry and cache.
+This single comparison shows 74.0% shorter guest resolution than the previous
+adapter and 21.8% shorter host installation than legacy `kpip`.
+The previous adapter recovered one failed download, which also affects its
+total duration. Host intervals and guest phases use different clocks.
+These samples do not establish a general speed distribution.
+The [measurement record](benchmark-metadata-2026-09-29.json) includes engine
+hashes, asset hashes, package versions, phase timings, and limitations.
 
 Host checks require Node and Python, without an engine rebuild:
 
