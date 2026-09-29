@@ -734,6 +734,30 @@ COPY --link --from=pixman-emscripten-dev /glib-emscripten/ /glib-emscripten/
 RUN mkdir -p build
 WORKDIR /qemu/build
 RUN npm i xterm-pty@v0.10.1
+# Karkhana: preserve nonblocking reads, avoid a missed readable event, and keep
+# heap indices unsigned above 2 GiB. QEMU dispatches stdio with its I/O mutex held;
+# a blocking read here can stop the VM. Keep the shipped out.js in sync.
+RUN python3 - <<'PY'
+from pathlib import Path
+p = Path('/qemu/build/node_modules/xterm-pty/emscripten-pty.js')
+s = p.read_text()
+patches = {
+    'PTY_atomicIndex = _malloc(4) >> 2;':
+        'PTY_atomicIndex = _malloc(4) >>> 2;',
+    '        if (PTY_pollTimeout === 0) {':
+        '        if (PTY.readable) return callback(0);\n'
+        '        if (PTY_pollTimeout === 0) {',
+    '        if (length && !readBytes.length) {\n':
+        '        if (length && !readBytes.length) {\n'
+        '            if (stream.flags & {{{ cDefs.O_NONBLOCK }}}) '
+        'throw new FS.ErrnoError({{{ cDefs.EAGAIN }}});\n',
+}
+for old, new in patches.items():
+    if s.count(old) != 1:
+        raise SystemExit(f'xterm-pty patch drift: expected one {old!r}')
+    s = s.replace(old, new)
+p.write_text(s)
+PY
 RUN cp /qemu/build/node_modules/xterm-pty/emscripten-pty.js /glib-emscripten/target/lib/libemscripten-pty.js
 ENV XTERM_PTY_CFLAGS="-lemscripten-pty.js -Wno-unused-command-line-argument"
 
