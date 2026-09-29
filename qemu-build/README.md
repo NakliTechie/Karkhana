@@ -124,6 +124,13 @@ Cancellation and total timeouts abort browser requests. Truncated transfers
 produce errors, never a successful EOF. `kfetch -o FILE` replaces its output
 only after a complete response.
 
+Each guest response reuses unbuffered `ready`, `chunk`, and `ack` descriptors.
+Reads seek to offset zero for each publication. Partial reads and writes complete
+within the existing bounds. EOF, cancellation, and failures close every descriptor
+before releasing the slot lock. Closing a suspended iterator prevents further
+acknowledgements. Handles never carry into another response or bridge generation.
+Run `python3 qemu-build/test-kfetch.py` for local lifecycle and concurrency checks.
+
 The browser permits only `GET` and `HEAD` on exact HTTPS PyPI/pythonhosted
 origins. It omits cookies, referrers, and credentials. It rejects redirects,
 URL credentials, and unsupported headers. The BYOK hostname cannot enter this
