@@ -693,6 +693,36 @@ class ResponseTests(unittest.TestCase):
         mailbox.assert_released(first)
         mailbox.assert_released(successor)
 
+    def test_retired_iterator_ack_cannot_mutate_successor_mailbox(self):
+        mailbox = Mailbox(self, slots=1)
+        first = mailbox.fetch()
+        iterator = first.iter_chunks()
+        self.assertEqual(next(iterator), b'payload')
+        mailbox.reset(uuid.uuid4().hex)
+        successor = mailbox.fetch()
+        before = {name: mailbox.text(successor.slot / name)
+                  for name in ('ack', 'cancel', 'request-ready')}
+
+        def bound_retired_wait(pending):
+            if pending is first:
+                pending.deadline = 0
+            else:
+                mailbox.pump()
+
+        mailbox.pause_hook = bound_retired_wait
+        with self.assertRaisesRegex(bridge.BridgeError, 'timed out'):
+            next(iterator)  # Resume past yield, causing the retired ACK.
+        self.assertEqual(mailbox.text(successor.slot / 'ack'), before['ack'],
+                         'retired ACK changed successor ACK')
+        self.assertEqual(mailbox.text(successor.slot / 'cancel'), before['cancel'])
+        self.assertEqual(mailbox.text(successor.slot / 'request-ready'), before['request-ready'])
+        mailbox.pause_hook = None
+        iterator.close()
+        first.close()
+        self.assertEqual(list(successor.iter_chunks()), [b'payload'])
+        mailbox.assert_released(first)
+        mailbox.assert_released(successor)
+
 
 if __name__ == '__main__':
     unittest.main()

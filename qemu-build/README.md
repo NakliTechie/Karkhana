@@ -141,7 +141,7 @@ upstream read promise does not settle. Malformed configuration and frame shapes
 produce bounded bridge errors.
 Run `python3 qemu-build/test-kfetch.py` for local lifecycle and concurrency checks.
 The [2026-09-29 hardening evidence](hardening-transport-2026-09-29.json) records
-100 host checks, independent probes, 22 deliberate negative controls, and one full installation.
+101 host checks, independent probes, 24 deliberate negative controls, and one full installation.
 
 The browser permits only `GET` and `HEAD` on exact HTTPS PyPI/pythonhosted
 origins. It omits cookies, referrers, and credentials. It rejects redirects,

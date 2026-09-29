@@ -1,6 +1,6 @@
 {
   "date": "2026-09-29",
-  "scope": "Browser-fetch protocol 2 mailbox lifecycle hardening; pre-deployment acceptance evidence.",
+  "scope": "Browser-fetch protocol 2 mailbox lifecycle hardening; host and local VM acceptance evidence.",
   "baseline": "f9db9ba03d2d3dc947fbc53554651dc70f3d4f7e",
   "source_sha256": {
     "browser-fetch.js": "d53a4205715eb7cf6296006a18edf60a0a5e769ce72db3ab82a3a7176b416e9b",
@@ -8,13 +8,13 @@
     "pypi-metadata.js": "2d669c3c595d026c173888b7eee80bf1a05b6e607e313d0c9b2f6d451a39b833"
   },
   "regressions": {
-    "kfetch": 32,
+    "kfetch": 33,
     "browser_fetch": 21,
     "pypi_metadata": 17,
     "loopback_adapter": 14,
     "cache_forwarding": 5,
     "pty": 11,
-    "total": 100,
+    "total": 101,
     "exit_code": 0
   },
   "independent": {
@@ -257,6 +257,24 @@
         "qemu-build/test-browser-fetch.mjs"
       ],
       "exit_code": 1
+    },
+    {
+      "name": "old-generation-ack",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_retired_iterator_ack_cannot_mutate_successor_mailbox"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "no-error-cleanup",
+      "command": [
+        "python3",
+        "qemu-build/test-kfetch.py",
+        "ResponseTests.test_cleanup_errors_preserve_transfer_failure"
+      ],
+      "exit_code": 1
     }
   ],
   "local_vm": {
@@ -323,7 +341,7 @@
     "Host Python 3.12 accepts the deeply nested JSON fixture. This host control proves shape validation, not the RecursionError conversion branch.",
     "Initial asynchronous-FS independent harness attempts were invalid and excluded.",
     "Original foreign-origin negative selector matched zero tests; the corrected selector failed as required.",
-    "Deployed acceptance follows the merge; this artifact records pre-deployment evidence only."
+    "This artifact records host and local VM evidence; the run report records deployed acceptance separately."
   ],
   "raw_evidence_directory": "/Users/chiragpatnaik/Code/Karkhana-transport-harden/qemu-build/diagnostics/transport-harden"
 }
