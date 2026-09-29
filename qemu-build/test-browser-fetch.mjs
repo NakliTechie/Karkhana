@@ -3,19 +3,19 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync,
-  chmodSync, rmSync, existsSync } from 'node:fs';
+  chmodSync, rmSync, existsSync, unlinkSync, rmdirSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { syntheticProject } from './fixtures/pypi-project.mjs';
 
-const sourcePath = new URL('./net/browser-fetch.js', import.meta.url);
-const clientPath = new URL('./guest/kfetch.py', import.meta.url).pathname;
+const sourcePath = process.env.BROWSER_FETCH_SOURCE || new URL('./net/browser-fetch.js', import.meta.url);
+const clientPath = process.env.KFETCH_TEST_CLIENT || new URL('./guest/kfetch.py', import.meta.url).pathname;
 const metadataURL = 'data:text/javascript;base64,' + readFileSync(new URL('./net/pypi-metadata.js', import.meta.url)).toString('base64');
 const source = Buffer.from(readFileSync(sourcePath, 'utf8').replace("'./pypi-metadata.js'", JSON.stringify(metadataURL)));
 const { createBrowserFetchBridge, FETCH_LIMITS } = await import(`data:text/javascript;base64,${source.toString('base64')}`);
 const generation = '6a8d81c1-b0bd-4d42-b0bc-f52168f114a6';
-const id = 'a'.repeat(32), token = `${generation}:${id}`;
+const id = 'a'.repeat(32);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function until(check, timeout = 4000) {
@@ -28,21 +28,23 @@ async function until(check, timeout = 4000) {
   throw new Error('test condition timed out');
 }
 
-function fixture(t, fetchImpl) {
+function fixture(t, fetchImpl, pypiOptions = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'karkhana-fetch-test-'));
   const root = join(directory, 'mailbox');
   const FS = { mkdir: mkdirSync, stat: statSync, readFile: path => new Uint8Array(readFileSync(path)),
-    writeFile: writeFileSync, chmod: chmodSync };
-  const bridge = createBrowserFetchBridge(FS, { root, generation, fetchImpl,
+    writeFile: writeFileSync, chmod: chmodSync, unlink: unlinkSync, rmdir: rmdirSync };
+  const bridge = createBrowserFetchBridge(FS, { root, generation, fetchImpl, pypiOptions,
     limits: { ...FETCH_LIMITS, pollMs: 2 } });
   bridge.start();
   t.after(() => { bridge.stop(); rmSync(directory, { recursive: true, force: true }); });
-  const path = name => join(root, '0', name);
+  const config = JSON.parse(readFileSync(join(root, 'config.json')));
+  const actualGeneration = config.generation;
+  const path = name => join(root, ...(config.protocol === 2 ? [actualGeneration] : []), '0', name);
   const write = (name, value) => writeFileSync(path(name), typeof value === 'string' ? value : JSON.stringify(value));
   function request(override = {}, requestId = id) {
-    write('request', { protocol: 1, generation, id: requestId, method: 'GET',
+    write('request', { protocol: config.protocol, generation: actualGeneration, id: requestId, method: 'GET',
       url: 'https://files.pythonhosted.org/packages/example.whl', headers: [], timeoutMs: 3000, ...override });
-    write('request-ready', `${generation}:${requestId}`);
+    write('request-ready', `${actualGeneration}:${requestId}`);
   }
   const frame = () => { try { return JSON.parse(readFileSync(path('ready'))); } catch (_) { return null; } };
   function pythonRaw(args) {
@@ -58,7 +60,7 @@ function fixture(t, fetchImpl) {
     return completion;
   }
   const python = args => pythonRaw([clientPath, ...args]);
-  return { bridge, directory, root, path, write, request, frame, python, pythonRaw };
+  return { bridge, FS, generation: actualGeneration, token: `${actualGeneration}:${id}`, directory, root, path, write, request, frame, python, pythonRaw };
 }
 
 test('Python client streams binary bytes and commits the output only after EOF', async t => {
@@ -180,16 +182,16 @@ test('headers and each bounded chunk require acknowledgement before reading ahea
   assert.deepEqual(header.headers, []);
   await sleep(30);
   assert.equal(reads, 0);
-  f.write('ack', `${token}:0`);
+  f.write('ack', `${f.token}:0`);
   const chunk = await until(() => f.frame()?.kind === 'chunk' && f.frame());
   assert.equal(chunk.size, FETCH_LIMITS.chunkBytes);
   await sleep(30);
   assert.equal(reads, 1);
   assert.equal(f.frame().seq, 1);
-  f.write('ack', `${token}:1`);
+  f.write('ack', `${f.token}:1`);
   await until(() => f.frame()?.seq === 2);
   assert.equal(f.frame().size, 9);
-  f.write('ack', `${token}:2`);
+  f.write('ack', `${f.token}:2`);
   await until(() => f.frame()?.kind === 'done');
   assert.equal(reads, 2);
 });
@@ -215,7 +217,7 @@ test('small browser fragments coalesce into bounded binary chunks without readin
   f.request();
   await until(() => f.frame()?.kind === 'headers');
   assert.equal(reads, 0);
-  f.write('ack', `${token}:0`);
+  f.write('ack', `${f.token}:0`);
   await until(() => f.frame()?.kind === 'chunk');
   assert.equal(f.frame().size, FETCH_LIMITS.chunkBytes);
   assert.equal(reads, Math.ceil(FETCH_LIMITS.chunkBytes / fragmentBytes));
@@ -228,7 +230,7 @@ test('small browser fragments coalesce into bounded binary chunks without readin
     assert.equal(frame.kind, 'chunk');
     assert.equal(frame.size, seq === 4 ? 317 : FETCH_LIMITS.chunkBytes);
     chunks.push(readFileSync(f.path('chunk')));
-    f.write('ack', `${token}:${seq}`);
+    f.write('ack', `${f.token}:${seq}`);
   }
   const done = await until(() => f.frame()?.kind === 'done' && f.frame());
   assert.equal(done.seq, 5, 'many browser reads require only four guest chunk ACKs');
@@ -289,14 +291,14 @@ test('reusing a cancelled slot cannot publish the previous request response', as
   f.request();
   await until(() => firstResolve);
   const replacement = 'b'.repeat(32);
-  f.write('cancel', token);
+  f.write('cancel', f.token);
   f.request({}, replacement);
   // Simulate fetch completing after its signal was aborted.
   firstResolve(new Response('stale secret bytes'));
   await until(() => f.frame()?.id === replacement);
   assert.equal(f.frame().kind, 'headers');
   assert.equal(f.bridge.status.active, 1);
-  f.write('ack', `${generation}:${replacement}:0`);
+  f.write('ack', `${f.generation}:${replacement}:0`);
   await until(() => f.frame()?.kind === 'chunk');
   assert.equal(readFileSync(f.path('chunk'), 'utf8'), 'new request');
 });
@@ -305,7 +307,7 @@ test('oversized requests fail without a fetch or unbounded read', async t => {
   let calls = 0;
   const f = fixture(t, async () => { calls++; return new Response('no'); });
   f.write('request', 'x'.repeat(FETCH_LIMITS.requestBytes + 1));
-  f.write('request-ready', token);
+  f.write('request-ready', f.token);
   await until(() => f.frame()?.kind === 'error');
   assert.match(f.frame().error, /size limit/);
   assert.equal(calls, 0);
@@ -437,4 +439,134 @@ with IndexServer(PackageIndex(fetch)) as server:
   assert.equal(f.bridge.status.pypi.projects, 1);
   assert.equal(f.bridge.status.pypi.cacheHits, 1);
   assert.equal(f.bridge.status.pypi.sessions, 0);
+});
+
+
+test('a body read that ignores abort still releases the slot on its total deadline', async t => {
+  let cancelled = 0;
+  const f = fixture(t, async () => ({ status: 200, headers: new Headers(), body: {
+    getReader: () => ({ read: () => new Promise(() => {}), cancel: async () => { cancelled++; } }),
+  } }));
+  f.request({ timeoutMs: 1000 });
+  await until(() => f.frame()?.kind === 'headers');
+  f.write('ack', `${f.token}:0`);
+  await until(() => f.frame()?.kind === 'error', 2500);
+  assert.equal(f.frame().code, 'timeout');
+  await until(() => f.bridge.status.active === 0);
+  assert.equal(cancelled, 1);
+});
+
+test('stop/restart retires files and rejects stale ownership without changing the new config', async t => {
+  const f = fixture(t, async () => new Response('new'));
+  const initial = JSON.parse(readFileSync(join(f.root, 'config.json')));
+  f.bridge.start();
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'config.json'))), initial);
+  const competing = createBrowserFetchBridge(f.FS, { root: f.root });
+  t.after(() => competing.stop());
+  assert.throws(() => competing.start(), /owner/);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'config.json'))), initial);
+  f.bridge.stop();
+  assert.equal(existsSync(join(f.root, initial.generation)), false);
+  assert.equal(JSON.parse(readFileSync(join(f.root, 'config.json'))).available, false);
+  f.bridge.start();
+  const next = JSON.parse(readFileSync(join(f.root, 'config.json')));
+  assert.notEqual(next.generation, initial.generation);
+  assert.equal(next.protocol, 2);
+  assert.equal(next.available, true);
+  const result = await f.python(['https://pypi.org/simple/demo/']);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout.toString(), 'new');
+  f.bridge.stop();
+  competing.start();
+  const successor = readFileSync(join(f.root, 'config.json'), 'utf8');
+  f.bridge.stop();
+  assert.equal(readFileSync(join(f.root, 'config.json'), 'utf8'), successor);
+  competing.stop();
+  assert.deepEqual(readdirSync(f.root).sort(), ['bin', 'config.json']);
+});
+
+
+test('redirect responses fail explicitly while conditional 304 remains supported', async t => {
+  const f = fixture(t, async url => url.includes('unchanged')
+    ? new Response(null, { status: 304, headers: { etag: 'same' } })
+    : new Response('redirect body', { status: 302, headers: { location: 'https://example.invalid/' } }));
+  const redirected = await f.python(['https://pypi.org/simple/redirect/']);
+  assert.equal(redirected.code, 1);
+  assert.match(redirected.stderr, /redirect/);
+  assert.equal(redirected.stdout.length, 0);
+  const unchanged = await f.python(['-I', 'https://pypi.org/simple/unchanged/']);
+  assert.equal(unchanged.code, 0, unchanged.stderr);
+  assert.match(unchanged.stdout.toString(), /HTTP 304/);
+  assert.equal(f.bridge.status.active, 0);
+});
+
+
+test('equivalent root paths share ownership', async t => {
+  const f = fixture(t, async () => new Response('owned'));
+  const before = readFileSync(join(f.root, 'config.json'), 'utf8');
+  const competing = createBrowserFetchBridge(f.FS, { root: f.root + '/./' });
+  t.after(() => competing.stop());
+  assert.throws(() => competing.start(), /owner/);
+  assert.equal(readFileSync(join(f.root, 'config.json'), 'utf8'), before);
+});
+
+test('cancelled PyPI wheel fetches do not prevent idle session expiry', async t => {
+  let clock = 1000, fileStarted = false;
+  const wheelUrl = 'https://files.pythonhosted.org/packages/a/demo-1.0-py3-none-any.whl';
+  const f = fixture(t, async url => {
+    if (url.startsWith('https://pypi.org/simple/')) return Response.json({ name: 'demo', files: [{
+      filename: 'demo-1.0-py3-none-any.whl', url: wheelUrl, hashes: {sha256: 'a'.repeat(64)},
+    }] });
+    fileStarted = true;
+    return new Promise(() => {});
+  }, { now: () => clock });
+  const session = 'c'.repeat(32), baseUrl = 'http://127.0.0.1:12345';
+  const guest = `
+import sys
+sys.path.insert(0, ${JSON.stringify(new URL('./guest/', import.meta.url).pathname)})
+from kfetch import fetch, BridgeError
+session = {"session": "${session}", "baseUrl": "${baseUrl}"}
+with fetch('https://pypi.org/simple/demo/', timeout=3, pypi={**session, 'operation':'project', 'project':'demo', 'format':'json'}) as response:
+    assert b'demo' in b''.join(response.iter_chunks())
+try:
+    with fetch('${wheelUrl}', timeout=1, pypi={**session, 'operation':'file', 'path':'/files/packages/a/demo-1.0-py3-none-any.whl'}) as response:
+        b''.join(response.iter_chunks())
+except BridgeError as error:
+    assert error.code == 'timeout', error
+else:
+    raise AssertionError('stalled file must time out')
+`;
+  const result = await f.pythonRaw(['-c', guest]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(fileStarted, true);
+  await until(() => f.bridge.status.active === 0);
+  clock += 24 * 60 * 60 * 1000;
+  assert.equal(f.bridge.status.pypi.sessions, 0);
+  assert.equal(f.bridge.status.pypi.wheels, 0);
+  assert.equal(f.bridge.status.pypi.cacheBytes, 0);
+});
+
+
+test('symlinked root aliases share ownership', async t => {
+  const f = fixture(t, async () => new Response('owned'));
+  const alias = join(f.directory, 'alias');
+  symlinkSync(f.root, alias);
+  const competing = createBrowserFetchBridge(f.FS, { root: alias });
+  t.after(() => competing.stop());
+  const before = readFileSync(join(f.root, 'config.json'), 'utf8');
+  assert.throws(() => competing.start(), /owner/);
+  assert.equal(readFileSync(join(f.root, 'config.json'), 'utf8'), before);
+});
+
+test('cancelling unacknowledged headers cancels the unopened response body once', async t => {
+  let cancelled = 0;
+  const f = fixture(t, async () => ({ status: 200, headers: new Headers(), body: {
+    cancel: async () => { cancelled++; },
+    getReader: () => { throw new Error('headers have not been acknowledged'); },
+  } }));
+  f.request();
+  await until(() => f.frame()?.kind === 'headers');
+  f.write('cancel', f.token);
+  await until(() => f.bridge.status.active === 0);
+  assert.equal(cancelled, 1);
 });

@@ -114,7 +114,13 @@ before boot. `/pack/info` adds their wrappers to the guest's PATH. Existing
 engine snapshots therefore need no rebuild. `build.sh`, `chunk.sh`, and
 `publish.sh` carry the bridge, metadata processor, and Python assets on subsequent rebuilds.
 
-`net/browser-fetch.js` implements four preallocated mailbox slots. Each slot
+`net/browser-fetch.js` implements four preallocated mailbox slots. Protocol 2
+places slots beneath a fresh generation directory. Retired clients cannot read
+or acknowledge successor files, even when reset occurs between marker and payload reads.
+Stop retires that directory after active work drains. Restart rejects while
+drainage is pending; callers may retry after the active counter reaches zero.
+Only one bridge may own an FS/root pair. Repeated start remains idempotent.
+The guest rejects mismatched protocols with a reload message. Each slot
 holds one request and one response chunk, capped at 256 KiB. A generation,
 request ID, and sequence number bind every publication and acknowledgement.
 Small browser fragments combine into full chunks before publication. Only
@@ -129,7 +135,13 @@ Reads seek to offset zero for each publication. Partial reads and writes complet
 within the existing bounds. EOF, cancellation, and failures close every descriptor
 before releasing the slot lock. Closing a suspended iterator prevents further
 acknowledgements. Handles never carry into another response or bridge generation.
+One iterator owns each Response. Total deadlines also apply when a consumer
+resumes after a delay. Aborted browser reads release their slot even when the
+upstream read promise does not settle. Malformed configuration and frame shapes
+produce bounded bridge errors.
 Run `python3 qemu-build/test-kfetch.py` for local lifecycle and concurrency checks.
+The [2026-09-29 hardening evidence](hardening-transport-2026-09-29.json) records
+100 host checks, independent probes, 22 deliberate negative controls, and one full installation.
 
 The browser permits only `GET` and `HEAD` on exact HTTPS PyPI/pythonhosted
 origins. It omits cookies, referrers, and credentials. It rejects redirects,
