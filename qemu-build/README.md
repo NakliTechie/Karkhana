@@ -86,9 +86,9 @@ drift apart.
 
 ## What's inside the guest
 
-Python 3.11 + uv (`kpip <pkg>` = tuned installer), Node 18, sqlite3, git, curl,
+Python 3.11 + uv (`kpip <pkg>` = tuned installer), Node 22, sqlite3, git, curl,
 `/usr/bin/agent` (OpenAI tool-loop agent; BYOK key never enters the VM),
-`ksave`/`krestore` (persistence), TERM=xterm-256color, 4 vCPUs (MTTCG), 1024M RAM.
+`ksave`/`krestore` (persistence), TERM=xterm-256color, 4 vCPUs (MTTCG), 1792M RAM.
 
 ## Networking — two modes, auto-selected
 
@@ -228,11 +228,23 @@ agent tier → BYOK endpoint (key stays in the browser; SW injects it at
   created, so every create failed after succeeding. The fix treats `O_PATH` as
   unsupported on emscripten so the existing fallback `fchmod()`s the descriptor
   directly.
-- **Bun binaries trap** (opencode etc.): need SSE4.2+; wasm TCG's qemu64 is
-  SSE2-era; `-cpu max` kernel-panics, `Nehalem` hangs (seam kept in
-  Dockerfile.builder). Prebuilt Go/baseline-Rust binaries run fine (uv proves it).
-- **Guest RAM ceiling:** 2048M fails silently (wasm heap is 3000M at QEMU
-  compile); stay at 1024M until the heap build-arg is raised.
+- **Modern x64 CPU features:** the builder uses
+  `qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16,+aes,+pclmulqdq`
+  for both native snapshot creation and browser restoration. This exposes
+  x86-64-v2 plus the AES and carry-less multiply instructions. The default
+  `qemu64` omits features required by Bun and OpenCode's baseline binaries.
+  The carried Wasm POPCNT correction fixes incorrect operand indexes and
+  zero-extends 32-bit results into the backend's 64-bit register globals.
+  Without that correction, enabling POPCNT crashes Go's container init.
+  Do not change only the published runtime arguments; rebuild the snapshot
+  with the same CPU flags. Compatibility checks belong on both cold boots
+  and snapshot restores, including real Bun evaluation and OpenCode startup.
+  Run `node qemu-build/test-cpu.mjs /path/to/qemu-wasm` from the repository
+  root with a local checkout containing the pinned QEMU commit. The test
+  applies the builder's exact patch to a temporary copy, compiles its C
+  emitters, then executes their Wasm output against known and randomized inputs.
+- **Guest RAM ceiling:** QEMU limits 32-bit hosts to 2047M guest RAM.
+  The current 1792M guest leaves room for QEMU inside the fixed 3000M Wasm heap.
 - **Entropy: FIXED** — carried kernel patch adds CONFIG_HW_RANDOM_VIRTIO +
   `-device virtio-rng-pci`; crng init at ~2.4 guest-seconds (was 90-560 s).
   TLS entropy stalls (git/node first-use hangs) are gone.
