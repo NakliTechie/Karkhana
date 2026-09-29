@@ -79,6 +79,95 @@ test('Python client streams binary bytes and commits the output only after EOF',
   assert.equal(f.bridge.status.bytes, bytes.length);
 });
 
+test('four Python clients stream isolated bytes while a fifth waits for a free slot', { timeout: 15000 }, async t => {
+  const payloads = Array.from({ length: 5 }, (_, client) => {
+    const bytes = Buffer.alloc(FETCH_LIMITS.chunkBytes * 2 + 137 + client * 53);
+    for (let offset = 0; offset < bytes.length; offset++)
+      bytes[offset] = ((offset * 17 + client * 79) ^ (offset >>> 8)) & 255;
+    return bytes;
+  });
+  const gates = payloads.map(() => {
+    let release;
+    const promise = new Promise(resolve => { release = resolve; });
+    return { promise, release };
+  });
+  t.after(() => gates.forEach(gate => gate.release()));
+  const calls = [], blocked = new Set();
+  let maxActive = 0;
+  const f = fixture(t, async url => {
+    const client = Number(new URL(url).pathname.match(/client-(\d)\.whl$/)?.[1]);
+    assert.ok(Number.isInteger(client) && client < payloads.length, url);
+    calls.push(client);
+    maxActive = Math.max(maxActive, f.bridge.status.active);
+    let offset = 0, released = false;
+    return { status: 200, url, headers: new Headers(), body: { getReader: () => ({
+      async read() {
+        // Hold every stream after one acknowledged chunk. All first four
+        // consumers own live slots before the fifth process enters the CLI.
+        if (offset && !released) {
+          blocked.add(client);
+          await gates[client].promise;
+          released = true;
+        }
+        if (offset === payloads[client].length) return { done: true };
+        await sleep(client % 3);
+        const end = Math.min(offset + (offset ? FETCH_LIMITS.chunkBytes + 37 : 257), payloads[client].length);
+        const value = payloads[client].subarray(offset, end);
+        offset = end;
+        return { done: false, value };
+      },
+      async cancel() { gates[client].release(); },
+    }) } };
+  });
+  const outputs = payloads.map((_, client) => join(f.directory, `client-${client}.whl`));
+  const args = client => ['-f', '--max-time', '10', '-o', outputs[client],
+    `https://files.pythonhosted.org/packages/client-${client}.whl`];
+  const clients = payloads.slice(0, 4).map((_, client) => f.python(args(client)));
+  await until(() => blocked.size === 4);
+  assert.equal(f.bridge.status.active, 4);
+
+  const fifthStarted = join(f.directory, 'fifth-started');
+  // The marker confirms Python has started before testing queue behavior.
+  // runpy executes the unchanged kfetch CLI, including its real file locks.
+  const launchFifth = `
+import pathlib, runpy, sys
+sys.argv = ${JSON.stringify([clientPath, ...args(4)])}
+pathlib.Path(${JSON.stringify(fifthStarted)}).write_text('ready')
+runpy.run_path(sys.argv[0], run_name='__main__')
+`;
+  let fifthFinished = false;
+  clients.push(f.pythonRaw(['-c', launchFifth]).then(result => { fifthFinished = true; return result; }));
+  await until(() => existsSync(fifthStarted));
+  await sleep(100);
+  assert.equal(fifthFinished, false);
+  assert.deepEqual([...calls].sort(), [0, 1, 2, 3]);
+  assert.equal(f.bridge.status.active, 4);
+  assert.ok(outputs.every(output => !existsSync(output)), 'partial streams must not publish output files');
+
+  // Release just one client. The queued fifth must reuse that slot while
+  // the other three remain blocked, without seeing their response bytes.
+  gates[2].release();
+  const released = await clients[2];
+  assert.equal(released.code, 0, released.stderr);
+  assert.deepEqual(readFileSync(outputs[2]), payloads[2]);
+  await until(() => blocked.has(4));
+  assert.equal(f.bridge.status.active, 4);
+  assert.equal(fifthFinished, false);
+
+  gates.forEach(gate => gate.release());
+  const results = await Promise.all(clients);
+  for (const [client, result] of results.entries()) {
+    assert.equal(result.code, 0, `client ${client}: ${result.stderr}`);
+    assert.deepEqual(readFileSync(outputs[client]), payloads[client]);
+  }
+  await until(() => f.bridge.status.active === 0);
+  assert.deepEqual([...calls].sort(), [0, 1, 2, 3, 4]);
+  assert.equal(maxActive, 4);
+  assert.equal(f.bridge.status.completed, 5);
+  assert.equal(f.bridge.status.failed, 0);
+  assert.equal(f.bridge.status.bytes, payloads.reduce((total, bytes) => total + bytes.length, 0));
+});
+
 test('headers and each bounded chunk require acknowledgement before reading ahead', async t => {
   let reads = 0;
   const payload = new Uint8Array(FETCH_LIMITS.chunkBytes + 9).fill(231);
