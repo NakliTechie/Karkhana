@@ -116,6 +116,13 @@ agent tier → BYOK endpoint (key stays in the browser; SW injects it at
 
 ## Known issues
 
+- **Terminal waits:** the carried xterm-pty patch honors `O_NONBLOCK`, checks
+  buffered input before registering a waiter, and uses an unsigned atomic index
+  on the 3000 MB heap. The builder patches the library before linking; the
+  shipped `out.js` carries the same changes. Run `node qemu-build/test-pty.mjs`
+  from the repo root after editing either copy. These defects can stall or crash
+  QEMU's I/O thread; they do not alone establish the cause of every observed freeze.
+
 - **9p WASI-errno mistranslation — FIXED by our carried patch** (upstream:
   issue ktock/qemu-wasm#45, PR ktock/qemu-wasm#46; builder compiles from
   NakliTechie/qemu-wasm `build/9p-fix-8604`). Lookup-miss now returns ENOENT
@@ -136,3 +143,22 @@ agent tier → BYOK endpoint (key stays in the browser; SW injects it at
 - **Entropy: FIXED** — carried kernel patch adds CONFIG_HW_RANDOM_VIRTIO +
   `-device virtio-rng-pci`; crng init at ~2.4 guest-seconds (was 90-560 s).
   TLS entropy stalls (git/node first-use hangs) are gone.
+
+## Investigating a VM freeze
+
+Use a disposable browser origin so the run cannot replace saved user state.
+Keep the tab visible and avoid concurrent Docker builds or compression jobs.
+Record host load; do not compare timing runs taken under different host loads.
+
+Run long commands in the background with output redirected to one log. Poll
+with `tail` or `stat` on that file, at most once per minute. Never use `du`,
+recursive `find`, or cache-directory walks as progress probes: these add minutes
+of guest work under TCG. A quiet terminal alone is not evidence of a frozen VM.
+
+For independent liveness evidence, pre-create a small file under `/persist`
+through `Module.FS`, then have a guest background loop update it every ten seconds.
+Read that file through `Module.FS` without sending terminal commands. Record its
+last change, queued PTY bytes, worker errors, and whether a fresh terminal marker
+returns. A stopped heartbeat means guest execution or its I/O path has stalled;
+use network replies and worker stacks to distinguish those cases. Save evidence
+before reloading, since reload destroys this VM.
