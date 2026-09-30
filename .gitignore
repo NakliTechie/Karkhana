@@ -24,6 +24,7 @@
 !pypi-metadata.js
 !kfetch.py
 !kpip_fast.py
+!karkhana-tty.sh
 !c2w-net-proxy.wasm.gzip
 !engine/
 !engine/**
@@ -54,6 +55,8 @@ qemu-build/*
 !qemu-build/test-browser-fetch.mjs
 !qemu-build/test-pypi-metadata.mjs
 !qemu-build/test-agent-bridge.mjs
+!qemu-build/test-karkhana-tty.py
+!qemu-build/test-terminal-size.mjs
 !qemu-build/profile-pypi-metadata.mjs
 !qemu-build/benchmark-metadata-2026-09-29.json
 !qemu-build/benchmark-transport-2026-09-29.json
@@ -70,6 +73,7 @@ qemu-build/guest/*
 !qemu-build/guest/agent.py
 !qemu-build/guest/kfetch.py
 !qemu-build/guest/kpip_fast.py
+!qemu-build/guest/karkhana-tty.sh
 !qemu-build/vendor/
 qemu-build/vendor/*
 !qemu-build/vendor/xterm.js

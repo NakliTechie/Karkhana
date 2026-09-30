@@ -240,6 +240,7 @@ python3 qemu-build/test-kpip-cache.py
 python3 qemu-build/test-kfetch.py
 node qemu-build/test-pty.mjs
 node qemu-build/test-agent-bridge.mjs
+python3 qemu-build/test-karkhana-tty.py
 ```
 
 The first suite includes the actual Python adapter and client against the JS
@@ -250,6 +251,30 @@ The last suite runs the service worker's fetch handler against a fake IndexedDB
 and a mock fetch: the model from the ⚙ panel must replace the guest agent's
 placeholder `default` on chat-completions requests, and the published
 `karkhana-sw.js` must match `qemu-build/karkhana-sw.js` except for the cache stamp.
+
+### Terminal size
+
+QEMU's serial console carries no window size. The guest pty therefore started
+at 0x0, and bash wrapped command lines at 80 columns, back over their own row.
+The page now stages `rows R cols C` and `guest/karkhana-tty.sh` into
+`/persist/.karkhana-tty` before boot. It rewrites the size on every xterm resize.
+`/pack/info` sets `PROMPT_COMMAND` to source the script at the first prompt,
+so the size applies before that prompt prints. A watcher in its own process
+group then re-applies the size within a second of a resize. The kernel sends
+SIGWINCH to the foreground job, so readline and full-screen programs redraw.
+The snapshot needs no rebuild.
+
+`python3 qemu-build/test-karkhana-tty.py` drives interactive bash on a real pty.
+Run it under the guest's bash 5.2 as well:
+
+```bash
+docker run --rm --init -v "$PWD:/w" karkhana-debian:amd64 python3 /w/qemu-build/test-karkhana-tty.py
+```
+
+`node qemu-build/test-terminal-size.mjs` boots the published tree in headless
+Chrome at 1440x810. It checks the first-prompt size and a 120-character command
+echoed on one row. It also checks resize propagation and SIGWINCH delivery.
+`KARKHANA_ROOT` selects another tree; `CHROME` selects the browser binary.
 
 `node qemu-build/profile-pypi-metadata.mjs` profiles a deterministic 10,424-wheel
 fixture on the host. Add `--fixture` to emit its JSON for browser or guest

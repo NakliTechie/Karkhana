@@ -79,6 +79,7 @@ The key never enters the VM. The guest talks to `api.karkhana.internal`; that re
 karkhana.shell.exec('uname -a')        // run a command
 karkhana.shell.send('partial input')   // write without a newline
 karkhana.shell.onData(cb)              // subscribe to guest output
+karkhana.shell.size                    // { cols, rows } — the guest pty follows it
 karkhana.persist.pull()                // mirror saved state to OPFS now
 karkhana.persist.forget()              // drop saved state
 karkhana.net                           // { mode, cert } — which network path is live
@@ -86,7 +87,7 @@ karkhana.net.directFetch               // availability, request/byte/error count
 karkhana.ai.gp.ask(prompt)             // on-device tier
 ```
 
-Read output through `onData`. The terminal renders to canvas, so the DOM has nothing to scrape.
+Read output through `onData`; it carries the raw guest stream. The rendered rows wrap at the terminal width.
 
 ## Not here yet
 

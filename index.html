@@ -215,6 +215,7 @@
         shell: {
           send: (text) => slave.ldisc.writeFromLower(text),
           exec: (cmd)  => slave.ldisc.writeFromLower(cmd + '\r'),
+          get size() { return { cols: xterm.cols, rows: xterm.rows }; },
           onData: (cb) => { dataListeners.push(cb); return () => { const i = dataListeners.indexOf(cb); if (i !== -1) dataListeners.splice(i, 1); }; },
         },
         vm: { get state() { return stateEl.textContent; } },
@@ -308,6 +309,19 @@
         });
       }
 
+      // Guest terminal size. QEMU's serial console carries no window size, so the
+      // guest pty would stay 0x0 and bash would wrap long lines at 80 columns,
+      // back over their own row. The page stages the xterm size and a prompt hook
+      // into /persist; the hook applies the size at the first prompt, and a guest
+      // watcher follows later resizes (qemu-build/guest/karkhana-tty.sh).
+      // Fetched now so the request overlaps the network-stack start.
+      const ttyScriptReady = fetch('./karkhana-tty.sh', { cache: 'no-cache' })
+        .then((response) => {
+          if (!response.ok) throw new Error('karkhana-tty.sh: HTTP ' + response.status);
+          return response.text();
+        })
+        .catch((error) => { console.warn('guest terminal sizing unavailable', error); return null; });
+
       setState('booting'); setStage('starting network stack…', 5);
       (async () => {
         try {
@@ -339,6 +353,19 @@
           });
           window.karkhana._persistRestored = !!opfsState;
           info += 'm: persist\n';
+
+          const ttyScript = await ttyScriptReady;
+          if (ttyScript) {
+            Module['preRun'].push((mod) => {
+              const dir = '/persist/.karkhana-tty';
+              try { mod.FS.mkdir(dir); } catch (e) {}
+              mod.FS.writeFile(dir + '/karkhana-tty.sh', ttyScript);
+              const stage = ({ cols, rows }) => mod.FS.writeFile(dir + '/size', 'rows ' + rows + ' cols ' + cols + '\n');
+              stage(xterm);
+              xterm.onResize(stage);
+            });
+            info += 'env: PROMPT_COMMAND=. /persist/.karkhana-tty/karkhana-tty.sh\n';
+          }
 
           // An opt-in HTTP path uses the existing 9p mount, so the shipped VM
           // gains kfetch/kpip-fast without rebuilding its kernel or snapshot.
