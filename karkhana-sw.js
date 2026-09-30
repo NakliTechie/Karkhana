@@ -12,6 +12,12 @@ const BIG = /\.(wasm|data|gzip)$/;
 //    user's configured endpoint + inject the Authorization header. The key lives
 //    in browser-side IndexedDB and never enters the VM.
 const AI_HOST = 'api.karkhana.internal';
+// The guest's agent sends "model": $KARKHANA_MODEL, which defaults to "default";
+// a validating provider (Ollama, OpenRouter) rejects that name with 404. The
+// panel's model fills in on chat-completions requests. An explicit guest choice
+// (KARKHANA_MODEL set) is forwarded as sent.
+const CHAT_PATH = /\/chat\/completions$/;
+const DEFAULT_MODEL = 'default';
 
 const idbGet = (key) => new Promise((resolve) => {
   const open = indexedDB.open('karkhana', 1);
@@ -49,6 +55,17 @@ const nanoViaClient = async (request) => {
   }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 };
 
+// Returns the raw bytes untouched, or a JSON string with cfg.model substituted.
+const withConfiguredModel = async (request, url, cfg) => {
+  const raw = await request.arrayBuffer();
+  if (!cfg.model || request.method !== 'POST' || !CHAT_PATH.test(url.pathname)) return raw;
+  let payload;
+  try { payload = JSON.parse(new TextDecoder().decode(raw)); } catch (e) { return raw; }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return raw;
+  if (payload.model && payload.model !== DEFAULT_MODEL) return raw;
+  return JSON.stringify({ ...payload, model: cfg.model });
+};
+
 const bridgeAi = async (request) => {
   const cfg = await idbGet('ai-agent');
   if (!cfg || !cfg.endpoint) {
@@ -61,12 +78,11 @@ const bridgeAi = async (request) => {
   const headers = new Headers(request.headers);
   headers.delete('host');
   if (cfg.key) headers.set('Authorization', 'Bearer ' + cfg.key);
+  const body = (request.method === 'GET' || request.method === 'HEAD') ? undefined
+    : await withConfiguredModel(request, url, cfg);
+  if (typeof body === 'string') headers.delete('content-length'); // rewritten; fetch recomputes it
   try {
-    return await fetch(target, {
-      method: request.method,
-      headers,
-      body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : await request.arrayBuffer(),
-    });
+    return await fetch(target, { method: request.method, headers, body });
   } catch (err) {
     return new Response(JSON.stringify({ error: 'karkhana bridge fetch failed: ' + err.message }),
                         { status: 502, headers: { 'Content-Type': 'application/json' } });

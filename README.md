@@ -23,7 +23,7 @@ The first visit downloads about 280 MiB of engine assets. The browser caches the
 | **Python packages** | `kpip <pkg>` — `uv` tuned for the in-page network path. Plain `pip` stalls against the proxy; `uv` does not |
 | **Node packages** | `npm install -g` works against the real registry |
 | **Persistence** | `ksave` tars `/usr/local` + `/root` to `/persist/state.tar`; the page mirrors it to OPFS within a few seconds and restores it at the next login |
-| **Agent** | `/usr/bin/agent "task"` — an OpenAI-protocol tool loop with `run_command` / `read_file` / `write_file` / `list_directory` |
+| **Agent** | `/usr/bin/agent "task"` — an OpenAI-protocol tool loop with `run_command` / `read_file` / `write_file` / `list_directory`. The model name comes from the ⚙ panel; `KARKHANA_MODEL` in the guest overrides it |
 
 Bun 1.4.2 executes JavaScript, cryptographic checks, and subprocesses on the x86-64-v2 guest CPU.
 OpenCode 1.18.33 passes version and help checks. Its version command takes approximately 153–180 guest seconds.
@@ -67,9 +67,9 @@ routes instead of falling back silently. The BYOK bridge remains separate.
 Two tiers, both optional — pull them out and the Linux box is unchanged.
 
 - **General-purpose:** on-device Gemini Nano where the browser offers it, with no key and no network call.
-- **Agent:** bring your own endpoint and key in the ⚙ panel.
+- **Agent:** bring your own endpoint, model and key in the ⚙ panel.
 
-The key never enters the VM. The guest talks to `api.karkhana.internal`; that request surfaces in the service worker, which rewrites it to your configured endpoint and injects the `Authorization` header from IndexedDB. Nothing inside the guest can read it — an in-guest `env | grep -ci secret` returns 0 while the bridge is working.
+The key never enters the VM. The guest talks to `api.karkhana.internal`; that request surfaces in the service worker, which rewrites it to your configured endpoint, injects the `Authorization` header from IndexedDB, and fills in the panel's model when the guest sends the placeholder name `default`. `node qemu-build/test-agent-bridge.mjs` proves the configured model reaches the endpoint. Nothing inside the guest can read it — an in-guest `env | grep -ci secret` returns 0 while the bridge is working.
 
 ## JS API
 
