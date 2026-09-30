@@ -24,7 +24,7 @@ mkdir -p "$STAGE/engine"
 # Page assets travel whole. karkhana.html is the single source for both the
 # local (direct) and published (chunked) modes — it picks by probing for the
 # manifest at runtime, so nothing is rewritten here.
-for f in karkhana.html load.js out.js arg-module.js karkhana-sw.js browser-fetch.js pypi-metadata.js kfetch.py kpip_fast.py c2w-net-proxy.wasm.gzip; do
+for f in karkhana.html load.js out.js arg-module.js karkhana-sw.js browser-fetch.js pypi-metadata.js kfetch.py kpip_fast.py karkhana-tty.sh c2w-net-proxy.wasm.gzip; do
     [ -f "$SRC/$f" ] && cp "$SRC/$f" "$STAGE/$f"
 done
 for d in vendor dist; do
