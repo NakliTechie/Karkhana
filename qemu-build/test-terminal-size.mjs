@@ -7,6 +7,7 @@
 //   - a foreground program receives SIGWINCH with the new size.
 // Run: node qemu-build/test-terminal-size.mjs
 // KARKHANA_ROOT serves another tree (default: the repository root).
+// KARKHANA_URL tests a deployed site instead, e.g. https://karkhana.naklitechie.com/
 // CHROME names the browser binary (default: the macOS Google Chrome install).
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -18,19 +19,21 @@ import { launch, serve, shell, until } from './browser-harness.mjs';
 const ROOT = path.resolve(process.env.KARKHANA_ROOT || fileURLToPath(new URL('..', import.meta.url)));
 // A staged tree from chunk.sh serves karkhana.html; publish.sh renames it index.html.
 const PAGE = existsSync(path.join(ROOT, 'index.html')) ? 'index.html' : 'karkhana.html';
-const BOOT_MS = 180_000;
+const LIVE_URL = process.env.KARKHANA_URL;
+// A live first visit downloads the whole engine before it boots.
+const BOOT_MS = LIVE_URL ? 900_000 : 180_000;
 
 // Rendered terminal rows, trailing blanks trimmed. xterm.js draws rows as DOM text here.
 const ROWS = `[...document.querySelectorAll('#terminal .xterm-rows > div')]
   .map((row) => row.textContent.replace(/\\s+$/, ''))`;
 
 test('the guest terminal follows the page terminal size', { timeout: BOOT_MS + 120_000 }, async (t) => {
-  const server = await serve(ROOT);
+  const server = LIVE_URL ? null : await serve(ROOT);
   const browser = await launch();
   const page = await browser.newPage();
-  t.after(async () => { await browser.close(); server.close(); });
+  t.after(async () => { await browser.close(); server?.close(); });
   await page.viewport(1440, 810);
-  await page.send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/${PAGE}` });
+  await page.send('Page.navigate', { url: LIVE_URL || `http://127.0.0.1:${server.address().port}/${PAGE}` });
   await until('the guest shell', () => page.evaluate('window.karkhana?.vm.state === "shell"'), BOOT_MS);
   const { capture, output, run } = shell(page);
   await capture();

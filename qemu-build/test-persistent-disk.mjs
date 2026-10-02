@@ -9,6 +9,7 @@
 // Run: node qemu-build/test-persistent-disk.mjs
 // KARKHANA_ROOT serves another tree (default: the repository root); a staged
 // tree from chunk.sh serves karkhana.html, a published one index.html.
+// KARKHANA_URL tests a deployed site instead, e.g. https://karkhana.naklitechie.com/
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -18,7 +19,9 @@ import { launch, serve, shell, sleep, until } from './browser-harness.mjs';
 
 const ROOT = path.resolve(process.env.KARKHANA_ROOT || fileURLToPath(new URL('..', import.meta.url)));
 const PAGE = existsSync(path.join(ROOT, 'index.html')) ? 'index.html' : 'karkhana.html';
-const BOOT_MS = 240_000;
+const LIVE_URL = process.env.KARKHANA_URL;
+// A live first visit downloads the whole engine before it boots.
+const BOOT_MS = LIVE_URL ? 900_000 : 240_000;
 // ext4 commits every 5 s; the disk worker flushes OPFS 1 s after the last write.
 const COMMIT_WAIT_MS = 9_000;
 const FIRST_VISIT_BUDGET = 64 * 1024 * 1024;
@@ -40,10 +43,10 @@ const rootSizeKB = async (run) => Number((await run("df -P / | awk 'NR==2 {print
 const COMMAND_MS = 60_000;
 
 test('the guest disk persists in OPFS', { timeout: 6 * BOOT_MS }, async (t) => {
-  const server = await serve(ROOT);
+  const server = LIVE_URL ? null : await serve(ROOT);
   const browser = await launch();
-  t.after(async () => { await browser.close(); server.close(); });
-  const url = `http://127.0.0.1:${server.address().port}/${PAGE}`;
+  t.after(async () => { await browser.close(); server?.close(); });
+  const url = LIVE_URL || `http://127.0.0.1:${server.address().port}/${PAGE}`;
   const marker = `kdisk-${process.pid}-${Date.now()}`;
   let first;
 
