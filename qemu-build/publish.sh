@@ -18,7 +18,7 @@ DEST="$REPO_ROOT"
 # the repo root: a blanket rm -rf here would take the whole working tree with it.
 OWNED=(engine dist vendor index.html karkhana-sw.js load.js out.js
        arg-module.js browser-fetch.js pypi-metadata.js kfetch.py kpip_fast.py karkhana-tty.sh
-       c2w-net-proxy.wasm.gzip)
+       opfs-disk.js opfs-disk-worker.js kdisk.qcow2.gz c2w-net-proxy.wasm.gzip)
 DRY=false
 STAGE="publish"
 

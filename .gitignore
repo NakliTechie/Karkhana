@@ -25,6 +25,9 @@
 !kfetch.py
 !kpip_fast.py
 !karkhana-tty.sh
+!opfs-disk.js
+!opfs-disk-worker.js
+!kdisk.qcow2.gz
 !c2w-net-proxy.wasm.gzip
 !engine/
 !engine/**
@@ -57,6 +60,13 @@ qemu-build/*
 !qemu-build/test-agent-bridge.mjs
 !qemu-build/test-karkhana-tty.py
 !qemu-build/test-terminal-size.mjs
+!qemu-build/test-opfs-disk.mjs
+!qemu-build/test-persistent-disk.mjs
+!qemu-build/browser-harness.mjs
+!qemu-build/disk/
+qemu-build/disk/*
+!qemu-build/disk/opfs-disk.js
+!qemu-build/disk/opfs-disk-worker.js
 !qemu-build/profile-pypi-metadata.mjs
 !qemu-build/benchmark-metadata-2026-09-29.json
 !qemu-build/benchmark-transport-2026-09-29.json
