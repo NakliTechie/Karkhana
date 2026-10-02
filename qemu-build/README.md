@@ -260,7 +260,8 @@ errors, and the Emscripten FS ops.
 `node qemu-build/test-persistent-disk.mjs` boots a tree in headless Chrome. It
 checks the mounted 16 GiB disk, survival of a reload and of an unsynced tab
 close, tmpfs `/tmp`, the second-tab scratch fallback, and first-visit OPFS cost.
-Set `KARKHANA_ROOT=qemu-build/publish` to test a staged build before publishing.
+Set `KARKHANA_ROOT=qemu-build/publish` to test a staged build before publishing,
+or `KARKHANA_URL=https://karkhana.naklitechie.com/` to test the deployed site.
 
 ### Terminal size
 
@@ -284,7 +285,8 @@ docker run --rm --init -v "$PWD:/w" karkhana-debian:amd64 python3 /w/qemu-build/
 `node qemu-build/test-terminal-size.mjs` boots the published tree in headless
 Chrome at 1440x810. It checks the first-prompt size and a 120-character command
 echoed on one row. It also checks resize propagation and SIGWINCH delivery.
-`KARKHANA_ROOT` selects another tree; `CHROME` selects the browser binary.
+`KARKHANA_ROOT` selects another tree, `KARKHANA_URL` a deployed site, and
+`CHROME` the browser binary.
 
 `node qemu-build/profile-pypi-metadata.mjs` profiles a deterministic 10,424-wheel
 fixture on the host. Add `--fixture` to emit its JSON for browser or guest
