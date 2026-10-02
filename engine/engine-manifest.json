@@ -14,8 +14,8 @@
    "qemu-system-x86_64.data.partak",
    "qemu-system-x86_64.data.partal"
   ],
-  "size": 247959038,
-  "sha256": "bc38bfd67a901fa36509dd9f97d7c54438c0e5f10833068497192ee041cbbd3c"
+  "size": 247853501,
+  "sha256": "09ab3f91dea80aaba19281c8477afd20428693f370688ccc0b43bbd54bb4e20e"
  },
  "qemu-system-x86_64.wasm": {
   "parts": [
