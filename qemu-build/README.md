@@ -241,16 +241,26 @@ python3 qemu-build/test-kfetch.py
 node qemu-build/test-pty.mjs
 node qemu-build/test-agent-bridge.mjs
 python3 qemu-build/test-karkhana-tty.py
+node qemu-build/test-opfs-disk.mjs
 ```
 
 The first suite includes the actual Python adapter and client against the JS
 bridge. A disposable browser run must additionally verify 9p visibility,
 runtime PATH, real CORS responses, a package install, and post-install liveness.
 Inspect `karkhana.net.directFetch` for transfer and metadata counters.
-The last suite runs the service worker's fetch handler against a fake IndexedDB
+`test-agent-bridge.mjs` runs the service worker's fetch handler against a fake IndexedDB
 and a mock fetch: the model from the ⚙ panel must replace the guest agent's
 placeholder `default` on chat-completions requests, and the published
 `karkhana-sw.js` must match `qemu-build/karkhana-sw.js` except for the cache stamp.
+`test-opfs-disk.mjs` runs the real disk worker in a Node worker thread against
+a file-backed stand-in for OPFS with one handle per file. It covers seeding,
+bounce-buffer boundaries, growth, the busy fallback, the reload retry, quota
+errors, and the Emscripten FS ops.
+
+`node qemu-build/test-persistent-disk.mjs` boots a tree in headless Chrome. It
+checks the mounted 16 GiB disk, survival of a reload and of an unsynced tab
+close, tmpfs `/tmp`, the second-tab scratch fallback, and first-visit OPFS cost.
+Set `KARKHANA_ROOT=qemu-build/publish` to test a staged build before publishing.
 
 ### Terminal size
 
@@ -283,9 +293,51 @@ These CPU profiles do not measure package-install speed.
 
 ## Persistence
 
-`ksave` in the guest tars /usr/local + /root into /persist/state.tar; the page
-auto-mirrors it to OPFS within 4 s; next boot auto-restores at first login.
-`karkhana.persist.forget()` in the console clears the saved state.
+The container's writable layer lives on a disk, not in RAM. QEMU attaches
+`/kdisk/disk.qcow2` as `/dev/vdb`: a 16 GiB ext4 filesystem in a qcow2 image.
+After the snapshot restores, the patched c2w init mounts it at `/run/kdisk`
+and points the overlay's `upperdir` and `workdir` into it. overlayfs rejects the
+two on separate mounts, so they are subdirectories of the one disk mount. The
+init mounts that exact overlay once as a probe; on any failure the layers stay
+on tmpfs. The overlay therefore mounts after the restore, not before it, and
+`/tmp` stays tmpfs.
+
+Two modes, chosen by the page:
+
+| Mode | Backing | Survives the tab | When |
+|---|---|---|---|
+| Persistent | `karkhana-disk/disk.qcow2` in OPFS | yes | default |
+| Scratch | in-memory template copy, left unmounted; the upper layer stays tmpfs | no | `?disk=scratch`, a second tab, no OPFS sync handles |
+
+`disk/opfs-disk.js` mounts a one-file Emscripten filesystem at `/kdisk`.
+QEMU's file syscalls reach the page's main thread, which cannot use OPFS sync
+handles or block. A module worker (`disk/opfs-disk-worker.js`) holds the
+handle; the main thread passes each request through shared memory and spins.
+Chrome measured 11 µs per 4 KiB read round trip. The guest's fsync reaches the
+mount's `syncfs` and flushes OPFS; otherwise the worker flushes 1 s after the
+last write. A closed tab loses at most ext4's 5 s commit interval.
+
+qcow2 keeps the disk sparse by format. OPFS quota counts a file's logical
+length, so a raw sparse image would bill all 16 GiB. A new disk starts from
+`kdisk.qcow2.gz`, built in `Dockerfile.builder`: 6.4 MiB, 46 KB compressed.
+The worker writes it to `disk.qcow2.part` and renames it only once complete.
+
+The snapshot is baked with the template attached at the same path, so the
+device exists on restore. The guest drops the block cache (`BLKFLSBUF`) before
+mounting, because the restored kernel may still hold the template's blocks.
+The template and runtime disk must keep the same 16 GiB virtual size.
+
+A second tab cannot open the disk; OPFS grants one sync handle per file. After
+3 s of retries it boots in scratch mode, and the header says so. The retry
+covers a reload, where the previous page can still hold the handle.
+
+`ksave`/`krestore` remain for scratch sessions. A persistent boot does not
+stage `state.tar`, because restoring it would roll the disk back. The one
+exception is the boot that creates a disk: it restores an existing
+`state.tar` once and renames it `state.tar.migrated`.
+`karkhana.persist.forget()` in the console clears the saved archive.
+`karkhana.disk` reports the mode, the fallback reason, and I/O counters.
+`karkhana.disk.forget()` deletes the disk; the reload creates a new one.
 
 ## AI (naklios two-tier)
 

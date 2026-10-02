@@ -24,8 +24,11 @@ mkdir -p "$STAGE/engine"
 # Page assets travel whole. karkhana.html is the single source for both the
 # local (direct) and published (chunked) modes — it picks by probing for the
 # manifest at runtime, so nothing is rewritten here.
-for f in karkhana.html load.js out.js arg-module.js karkhana-sw.js browser-fetch.js pypi-metadata.js kfetch.py kpip_fast.py karkhana-tty.sh c2w-net-proxy.wasm.gzip; do
-    [ -f "$SRC/$f" ] && cp "$SRC/$f" "$STAGE/$f"
+# Every one is required: a missing disk template or worker fails the boot, so
+# a stale build output stops here instead of publishing a broken page.
+for f in karkhana.html load.js out.js arg-module.js karkhana-sw.js browser-fetch.js pypi-metadata.js kfetch.py kpip_fast.py karkhana-tty.sh opfs-disk.js opfs-disk-worker.js kdisk.qcow2.gz c2w-net-proxy.wasm.gzip; do
+    [ -f "$SRC/$f" ] || { echo "FATAL: $SRC/$f missing" >&2; exit 1; }
+    cp "$SRC/$f" "$STAGE/$f"
 done
 for d in vendor dist; do
     [ -d "$SRC/$d" ] && cp -R "$SRC/$d" "$STAGE/$d"

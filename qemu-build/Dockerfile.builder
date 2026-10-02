@@ -55,6 +55,136 @@ ARG SOURCE_REPO
 ARG SOURCE_REPO_VERSION
 RUN apt-get update && apt-get install -y git
 RUN git clone -b ${SOURCE_REPO_VERSION} ${SOURCE_REPO} /assets
+# Karkhana carried patch: persistent guest disk. The page attaches a qcow2 image
+# as the second virtio disk (/dev/vdb): the user's OPFS disk, or the template in
+# memory when OPFS is unavailable. The container's overlay is mounted after the
+# snapshot restores rather than before it, so its upper layer can live on that
+# disk. karkhana_disk.go mounts the disk when /mnt/wasi1/info says "disk: vdb"
+# and moves the overlay's upper and work directories onto it; without that
+# line, or on any failure, they stay on tmpfs.
+COPY <<'EOF' /assets/cmd/init/karkhana_disk.go
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+
+	inittype "github.com/ktock/container2wasm/cmd/init/types"
+)
+
+const (
+	karkhanaDiskDevice = "/dev/vdb"
+	karkhanaDiskMount  = "/run/kdisk"
+	karkhanaProbeMount = "/run/kdisk-probe"
+	// BLKFLSBUF drops the block device's cached pages. The snapshot was taken
+	// with the template attached, so the restored kernel can hold its blocks.
+	karkhanaBlkFlsBuf = 0x1261
+	// The overlay options create-spec writes for the container's rootfs.
+	karkhanaTmpfsLayers = "upperdir=/run/rootfs-upper,workdir=/run/rootfs-work"
+	karkhanaDiskLayers  = "upperdir=" + karkhanaDiskMount + "/upper,workdir=" + karkhanaDiskMount + "/work"
+)
+
+// karkhanaDisk runs after the snapshot restores and before cfg.PostMounts.
+// Its messages avoid "karkhana:", which the page reads as the shell prompt.
+func karkhanaDisk(cfg *inittype.BootConfig) {
+	if !karkhanaDiskRequested() {
+		return
+	}
+	if err := karkhanaUseDisk(cfg); err != nil {
+		fmt.Printf("karkhana disk: unavailable (%v); this session uses scratch storage\n", err)
+		return
+	}
+	fmt.Printf("karkhana disk: persistent\n")
+}
+
+func karkhanaDiskRequested() bool {
+	f, err := os.Open(filepath.Join("/mnt", packFSTag, "info"))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		k, v, ok := strings.Cut(s.Text(), ":")
+		if ok && k == "disk" && strings.TrimSpace(v) == "vdb" {
+			return true
+		}
+	}
+	return false
+}
+
+// karkhanaUseDisk mounts the disk and points the rootfs overlay's upper and
+// work directories into it. overlayfs needs both under one mount, so they
+// are subdirectories of the disk mount rather than separate binds.
+func karkhanaUseDisk(cfg *inittype.BootConfig) (err error) {
+	rootfs := -1
+	for i, m := range cfg.PostMounts {
+		if m.FSType == "overlay" && m.Dst == "/run/rootfs" && strings.Count(m.Data, karkhanaTmpfsLayers) == 1 {
+			rootfs = i
+		}
+	}
+	if rootfs < 0 {
+		return fmt.Errorf("rootfs overlay not found")
+	}
+	fd, err := syscall.Open(karkhanaDiskDevice, syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), karkhanaBlkFlsBuf, 0)
+	syscall.Close(fd)
+	if errno != 0 {
+		return fmt.Errorf("flush %s: %w", karkhanaDiskDevice, errno)
+	}
+	if err := os.MkdirAll(karkhanaDiskMount, 0755); err != nil {
+		return err
+	}
+	if err := syscall.Mount(karkhanaDiskDevice, karkhanaDiskMount, "ext4", syscall.MS_NOATIME, ""); err != nil {
+		return fmt.Errorf("mount %s: %w", karkhanaDiskDevice, err)
+	}
+	defer func() {
+		if err != nil {
+			syscall.Unmount(karkhanaDiskMount, 0)
+		}
+	}()
+	for _, d := range []string{"upper", "work"} {
+		if err := os.MkdirAll(filepath.Join(karkhanaDiskMount, d), 0755); err != nil {
+			return err
+		}
+	}
+	// Mount the exact overlay once: a failure here keeps tmpfs, where a
+	// failure inside mountAll would panic init and stop the VM.
+	data := strings.Replace(cfg.PostMounts[rootfs].Data, karkhanaTmpfsLayers, karkhanaDiskLayers, 1)
+	if err := os.MkdirAll(karkhanaProbeMount, 0755); err != nil {
+		return err
+	}
+	if err := syscall.Mount("overlay", karkhanaProbeMount, "overlay", 0, data); err != nil {
+		return fmt.Errorf("overlay on disk: %w", err)
+	}
+	if err := syscall.Unmount(karkhanaProbeMount, 0); err != nil {
+		return fmt.Errorf("overlay probe: %w", err)
+	}
+	cfg.PostMounts[rootfs].Data = data
+	// /tmp stays scratch: the guest keeps pid-keyed locks there, and pids repeat
+	// on every restore of the same snapshot.
+	cfg.PostMounts = append(cfg.PostMounts, inittype.MountInfo{
+		FSType: "tmpfs",
+		Src:    "tmpfs",
+		Dst:    "/run/rootfs/tmp",
+		Data:   "mode=1777",
+	})
+	return nil
+}
+EOF
+RUN cd /assets && \
+    sed -i 's|^\tif err := mountAll(cfg.PostMounts); err != nil {$|\tkarkhanaDisk(\&cfg)\n&|' cmd/init/main.go && \
+    test "$(grep -cF 'karkhanaDisk(&cfg)' cmd/init/main.go)" -eq 1 && \
+    sed -i 's|^\t\tbootConfig.Mounts = append(bootConfig.Mounts, rootfsMount) // mount embedded rootfs as soon as possible$|\t\tbootConfig.PostMounts = append(bootConfig.PostMounts, rootfsMount) // Karkhana: after restore, so the upper layer can live on the persistent disk|' cmd/create-spec/main.go && \
+    test "$(grep -cF 'Karkhana: after restore' cmd/create-spec/main.go)" -eq 1 && \
+    test "$(grep -cF 'bootConfig.Mounts = append(bootConfig.Mounts, rootfsMount)' cmd/create-spec/main.go)" -eq 0
 FROM scratch AS assets
 COPY --link --from=assets-base /assets /
 
@@ -801,6 +931,12 @@ RUN test "$(grep -o '"-nographic",' /args.json.template | wc -l)" -eq 1 && \
     sed -i 's/"-nographic",/"-cpu", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16,+aes,+pclmulqdq", "-nographic",/' /args.json.template
 RUN sed -i 's/security_model=passthrough,id=wasi0/security_model=none,id=wasi0/' /args.json.template
 RUN sed -i 's/"-nographic",/"-object", "rng-builtin,id=rng0", "-device", "virtio-rng-pci,rng=rng0", "-nographic",/' /args.json.template
+# The persistent disk is the second virtio drive, after the rootfs, so it is
+# /dev/vdb and existing devices keep their PCI slots. Snapshot creation and the
+# browser use the same path: the native stage puts the template there, and the
+# page supplies the user's OPFS disk or an in-memory template copy.
+RUN test "$(grep -c '"-drive", "if=virtio,format=raw,file=/pack/rootfs.bin",' /args.json.template)" -eq 1 && \
+    sed -i 's|"-drive", "if=virtio,format=raw,file=/pack/rootfs.bin",|&\n    "-drive", "if=virtio,format=qcow2,file=/kdisk/disk.qcow2,werror=report,rerror=report",|' /args.json.template
 RUN MIGRATION_FLAGS= ; \
     if test "${QEMU_MIGRATION}" = "true"  ; then \
       MIGRATION_FLAGS='"-incoming", "file:/pack/vm.state",' ; \
@@ -845,6 +981,18 @@ RUN echo "Module['arguments'] =" > /out/arg-module.js
 RUN cat /out/args.json >> /out/arg-module.js
 RUN echo ";" >> /out/arg-module.js
 
+# Karkhana: the persistent disk's starting image. ext4 on a 16 GiB qcow2: the
+# inode tables and journal are zeroed now, and qemu-img stores no zero
+# clusters, so a new disk costs about 6.4 MiB and the kernel never zeroes it
+# later. Debian 12's mke2fs matches the guest's userland; Linux 6.1 mounts it.
+FROM debian:12-slim AS kdisk-template
+RUN apt-get update && apt-get install -y --no-install-recommends e2fsprogs qemu-utils && \
+    rm -rf /var/lib/apt/lists/*
+RUN mkdir /out && truncate -s 16G /tmp/raw && \
+    mkfs.ext4 -q -F -m 0 -L karkhana -J size=32 -E lazy_itable_init=0,lazy_journal_init=0,nodiscard /tmp/raw && \
+    qemu-img convert -O qcow2 -o cluster_size=65536 /tmp/raw /out/disk.qcow2 && \
+    rm /tmp/raw && gzip -9 -n -k /out/disk.qcow2
+
 FROM gcc:14 AS qemu-native-dev
 RUN apt-get update && apt-get install -y libffi-dev libglib2.0-dev libpixman-1-dev libattr1 libattr1-dev ninja-build pipx
 RUN PIPX_BIN_DIR=/usr/local/bin pipx install meson==1.5.0
@@ -867,6 +1015,8 @@ RUN cp /qemu/pc-bios/efi-virtio.rom /pack/
 
 COPY --link --from=get-qemu-state-dev /out/get-qemu-state /get-qemu-state
 COPY --link --from=qemu-config-dev-amd64 /out/args-before-cp.json /
+# Outside /pack: the snapshot needs the device, the engine's .data does not.
+COPY --link --from=kdisk-template /out/disk.qcow2 /kdisk/disk.qcow2
 RUN mkdir -p /tmp/wasi0 /tmp/wasi1
 WORKDIR /qemu/build/
 ARG QEMU_MIGRATION
@@ -960,6 +1110,7 @@ FROM scratch AS js-qemu-amd64-base
 COPY --link --from=qemu-emscripten-dev-amd64 /qemu/build/qemu-system-x86_64 /out.js
 COPY --link --from=qemu-emscripten-dev-amd64 /qemu/build/qemu-system-x86_64.wasm /
 COPY --link --from=qemu-config-dev-amd64 /out/arg-module.js /
+COPY --link --from=kdisk-template /out/disk.qcow2.gz /kdisk.qcow2.gz
 
 FROM js-qemu-amd64-base AS js-qemu-amd64-single
 COPY --link --from=qemu-emscripten-dev-amd64 /qemu/build/qemu-system-x86_64.data /

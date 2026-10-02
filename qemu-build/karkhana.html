@@ -19,6 +19,9 @@
       #vmstate.booting { color:var(--kk-warn); border-color:var(--kk-warn); }
       #vmstate.shell   { color:var(--kk-ok);   border-color:var(--kk-ok); }
       #vmstate.panicked{ color:var(--kk-brand);border-color:var(--kk-brand); }
+      #diskstate { padding:2px 10px; border:1px solid var(--kk-line); border-radius:3px; font-size:12px; color:var(--kk-ink-mute); }
+      #diskstate.persistent { color:var(--kk-ok);   border-color:var(--kk-ok); }
+      #diskstate.scratch    { color:var(--kk-warn); border-color:var(--kk-warn); }
       #terminal { flex:1; padding:6px 10px; min-height:0; }
       .xterm .xterm-viewport { background:var(--kk-body) !important; }
       #overlay { position:fixed; inset:0; background:var(--kk-body); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; transition:opacity .6s; z-index:10; }
@@ -51,6 +54,7 @@
       <span class="brand">KARKHANA</span><span class="devanagari">कारख़ाना</span>
       <span style="color:var(--kk-ink-mute)">Debian 12 · glibc · python3 · node — qemu-wasm engine</span>
       <button id="cfgbtn" title="Agent AI settings">⚙</button>
+      <span id="diskstate">disk: …</span>
       <span id="vmstate">stopped</span>
     </header>
     <div id="cfgpanel" hidden>
@@ -95,6 +99,7 @@
       import './arg-module.js';
       import initEmscriptenModule from './out.js';
       import { createBrowserFetchBridge } from './browser-fetch.js';
+      import { fetchDiskTemplate, mountOpfsDisk, openOpfsDisk } from './opfs-disk.js';
 
       const stateEl = document.getElementById('vmstate');
       const overlay = document.getElementById('overlay');
@@ -322,6 +327,29 @@
         })
         .catch((error) => { console.warn('guest terminal sizing unavailable', error); return null; });
 
+      // Guest disk. QEMU attaches /kdisk/disk.qcow2 as /dev/vdb, and with
+      // "disk: vdb" in /pack/info the guest puts the overlay's upper layer on it.
+      // Persistent: the image lives in OPFS, so installs survive the tab
+      // (opfs-disk.js). Scratch: an in-memory copy of the template that the
+      // guest leaves unmounted, so writes stay in tmpfs and vanish with the tab.
+      // ?disk=scratch asks for scratch; another tab holding the disk, or a
+      // browser without OPFS sync handles, forces it.
+      const diskEl = document.getElementById('diskstate');
+      const DISK_TEMPLATE = new URL('./kdisk.qcow2.gz', location.href);
+      const diskReady = (async () => {
+        let reason = 'requested with ?disk=scratch';
+        if (new URLSearchParams(location.search).get('disk') !== 'scratch') {
+          try {
+            const disk = await openOpfsDisk({ workerUrl: new URL('./opfs-disk-worker.js', location.href), templateUrl: DISK_TEMPLATE });
+            return { mode: 'persistent', disk };
+          } catch (error) {
+            reason = error.code === 'busy' ? 'another Karkhana tab is using the disk' : error.message;
+            console.warn('karkhana: persistent disk unavailable', error);
+          }
+        }
+        return { mode: 'scratch', reason, template: await fetchDiskTemplate(DISK_TEMPLATE) };
+      })();
+
       setState('booting'); setStage('starting network stack…', 5);
       (async () => {
         try {
@@ -340,18 +368,54 @@
               try {
                 const fh = await dir.getFileHandle('state.tar');
                 const f = await fh.getFile();
-                if (f.size > 0) return new Uint8Array(await f.arrayBuffer());
+                if (f.size > 0) return { bytes: new Uint8Array(await f.arrayBuffer()), handle: fh };
               } catch (e) {}
             } catch (e) { console.warn('opfs unavailable', e); }
             return null;
           })();
-          try { navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
+
+          const guestDisk = await diskReady;
+          const { disk } = guestDisk;
+          diskEl.textContent = 'disk: ' + guestDisk.mode;
+          diskEl.className = guestDisk.mode;
+          diskEl.title = disk ? 'installs and files stay in this browser across visits'
+            : 'nothing survives closing this tab: ' + guestDisk.reason;
+          window.karkhana.disk = {
+            mode: guestDisk.mode, reason: guestDisk.reason || null, created: !!disk?.created, persisted: null,
+            get stats() { return disk ? { size: disk.size, ...disk.stats } : null; },
+            flush: () => disk?.flush(),
+            // Deletes the disk and everything on it; the reload starts a new one.
+            forget: async () => {
+              disk?.close();
+              const root = await navigator.storage.getDirectory();
+              const dir = await root.getDirectoryHandle('karkhana-disk', { create: true });
+              await dir.removeEntry('disk.qcow2').catch((e) => { if (e.name !== 'NotFoundError') throw e; });
+              location.reload();
+            },
+          };
+          // Not awaited: Firefox answers persist() with a permission prompt.
+          navigator.storage?.persist?.().then((v) => { window.karkhana.disk.persisted = v; }, () => {});
+          Module['preRun'].push((mod) => {
+            if (disk) return mountOpfsDisk(mod.FS, disk);
+            try { mod.FS.mkdir('/kdisk'); } catch (e) {}
+            mod.FS.writeFile('/kdisk/disk.qcow2', guestDisk.template);
+          });
+          if (disk) {
+            info += 'disk: vdb\n';
+            window.addEventListener('pagehide', () => { try { disk.flush(); } catch (e) {} });
+          }
+
+          // The persistent disk keeps /usr/local and /root by itself. A ksave
+          // archive is restored once, into a newly created disk, then set aside:
+          // restoring it on every boot would roll the disk back.
+          const stagedState = disk && !disk.created ? null : opfsState;
+          if (disk && stagedState) stagedState.handle.move('state.tar.migrated').catch((e) => console.warn('karkhana: state.tar kept', e));
           Module['preRun'].push((mod) => {
             try { mod.FS.mkdir('/persist'); } catch (e) {}
-            mod.FS.writeFile('/persist/state.tar', opfsState || new Uint8Array(0));
+            mod.FS.writeFile('/persist/state.tar', stagedState ? stagedState.bytes : new Uint8Array(0));
             mod.FS.writeFile('/persist/.ksave-done', '0'); // pre-created: guest bumps it after ksave
           });
-          window.karkhana._persistRestored = !!opfsState;
+          window.karkhana._persistRestored = !!stagedState;
           info += 'm: persist\n';
 
           const ttyScript = await ttyScriptReady;

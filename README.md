@@ -22,7 +22,7 @@ The first visit downloads about 280 MiB of engine assets. The browser caches the
 | **Languages** | Python 3.11.2, Node 22.23.3, sqlite3, git, curl |
 | **Python packages** | `kpip <pkg>` — `uv` tuned for the in-page network path. Plain `pip` stalls against the proxy; `uv` does not |
 | **Node packages** | `npm install -g` works against the real registry |
-| **Persistence** | `ksave` tars `/usr/local` + `/root` to `/persist/state.tar`; the page mirrors it to OPFS within a few seconds and restores it at the next login |
+| **Persistence** | Writes land on a 16 GiB disk in this browser's origin-private storage (OPFS), so installs and files survive closing the tab. A new disk costs about 6.4 MiB and grows as used. A second tab, or `?disk=scratch`, runs on scratch storage that the tab discards; `ksave` still saves a scratch session |
 | **Agent** | `/usr/bin/agent "task"` — an OpenAI-protocol tool loop with `run_command` / `read_file` / `write_file` / `list_directory`. The model name comes from the ⚙ panel; `KARKHANA_MODEL` in the guest overrides it |
 
 Bun 1.4.2 executes JavaScript, cryptographic checks, and subprocesses on the x86-64-v2 guest CPU.
@@ -80,7 +80,9 @@ karkhana.shell.exec('uname -a')        // run a command
 karkhana.shell.send('partial input')   // write without a newline
 karkhana.shell.onData(cb)              // subscribe to guest output
 karkhana.shell.size                    // { cols, rows } — the guest pty follows it
-karkhana.persist.pull()                // mirror saved state to OPFS now
+karkhana.disk                          // { mode, reason, created, persisted, stats } — the guest disk
+karkhana.disk.forget()                 // delete the disk; the reload starts a fresh one
+karkhana.persist.pull()                // mirror a ksave archive to OPFS now
 karkhana.persist.forget()              // drop saved state
 karkhana.net                           // { mode, cert } — which network path is live
 karkhana.net.directFetch               // availability, request/byte/error counters
@@ -93,7 +95,7 @@ Read output through `onData`; it carries the raw guest stream. The rendered rows
 
 The 32-bit build had several things this one does not. Named plainly rather than left to discovery:
 
-- **No host-folder workspace.** The v86 build bridged a real folder in via the File System Access API. The qemu-wasm guest has `/persist` (OPFS-backed) and no host folder.
+- **No host-folder workspace.** The v86 build bridged a real folder in via the File System Access API. The qemu-wasm guest keeps its disk in OPFS and has no host folder.
 - **No MCP server**, so external agents cannot connect to the VM yet.
 - **No file browser, toasts, or help modal.** The v86 sidebar read the guest filesystem directly; here the filesystem is only reachable through `shell.exec`, so the tree needs building rather than porting.
 - **No `fs` JS API** — `shell.exec` is the way in.
@@ -126,7 +128,7 @@ Karkhana runs a **fork of qemu-wasm** carrying three fixes, because upstream has
 1. Open **[karkhana.naklitechie.com](https://karkhana.naklitechie.com/)** and wait for the engine to download.
 2. Type at the `karkhana:~$` prompt.
 3. `kpip <pkg>` for Python, `npm install -g <pkg>` for Node.
-4. `ksave` to keep what you installed; it comes back on the next visit.
+4. What you install stays in this browser for the next visit. The header shows `disk: persistent`; `disk: scratch` means this tab keeps nothing.
 5. ⚙ to point the agent at an endpoint, then `agent "what does this script do?"`.
 
 ## Local development
