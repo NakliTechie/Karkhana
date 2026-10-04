@@ -374,8 +374,31 @@ exception is the boot that creates a disk: it restores an existing
 ## AI (naklios two-tier)
 
 ⚙ panel: GP tier → on-device Gemini Nano when available (`builtin:nano`);
-agent tier → BYOK endpoint (key stays in the browser; SW injects it at
-`api.karkhana.internal`). In-guest `agent "task"` speaks OpenAI protocol.
+agent tier → an endpoint the service worker reaches at `api.karkhana.internal`.
+Presets fill the endpoint: Ferrule, Ollama, LM Studio, llama.cpp, OpenRouter,
+OpenAI, Anthropic, Nano. Endpoints carry no `/v1`; the bridge appends the
+guest's own path.
+
+The guest holds a placeholder key only. `/pack/info` sets `OPENAI_BASE_URL`,
+`OPENAI_API_BASE`, `ANTHROPIC_BASE_URL` and `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`
+(`karkhana-bridge`), so aider, OpenCode, Claude Code and the SDKs find the bridge
+without flags. The worker swaps the real key into the header the client used:
+`x-api-key` for Anthropic-protocol calls, `Authorization` otherwise. For
+`api.anthropic.com` it adds `anthropic-dangerous-direct-browser-access`. A
+`"model": "default"` is replaced by the panel's model, so
+`aider --model openai/default` uses it.
+
+The agent config lives in IndexedDB only, where the worker reads it; an older
+`localStorage` copy is moved there once and removed. With the Ferrule preset,
+provider keys stay in Ferrule's vault and the field holds a revocable `frl_`
+token. Ferrule 1.2.0 or later answers the browser preflight, including Chrome's
+Private-Network check. From the https site, Chrome may ask to allow local
+network access the first time.
+
+`node qemu-build/test-ai-bridge-browser.mjs` boots the page against an endpoint
+(`KARKHANA_AI_ENDPOINT`, `KARKHANA_AI_KEY`, `KARKHANA_AI_MODEL`; `go run
+./cmd/ferrule-demo` in the Ferrule repo serves fakes). It checks the env, an
+SDK-shaped call with the placeholder, and the IndexedDB-only key.
 
 ## Known issues
 

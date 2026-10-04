@@ -44,6 +44,8 @@
       #cfgpanel label { width:64px; color:var(--kk-ink-soft); }
       #cfgpanel input { flex:1; max-width:480px; background:var(--kk-row); border:1px solid var(--kk-line); color:var(--kk-ink); padding:4px 8px; border-radius:3px; font:inherit; }
       #cfgpanel input:focus { outline:none; border-color:var(--kk-act); }
+      #cfgpanel select { background:var(--kk-row); border:1px solid var(--kk-line); color:var(--kk-ink); padding:4px 8px; border-radius:3px; font:inherit; }
+      #cfg-key-note { color:var(--kk-ink-mute); max-width:480px; }
       #cfgpanel .actions button { background:var(--kk-row); border:1px solid var(--kk-line); color:var(--kk-ink-mid); padding:3px 10px; border-radius:3px; cursor:pointer; font:inherit; }
       #cfgpanel .actions button:hover { border-color:var(--kk-act); color:var(--kk-ink); }
       #cfg-note { color:var(--kk-ok); }
@@ -58,14 +60,15 @@
       <span id="vmstate">stopped</span>
     </header>
     <div id="cfgpanel" hidden>
+      <div class="row"><label>Preset</label><select id="cfg-preset"><option value="">choose a provider…</option></select></div>
       <div class="row"><label>Endpoint</label><input id="cfg-endpoint" placeholder="https://openrouter.ai/api  ·  or builtin:nano" /></div>
       <div class="row"><label>Model</label><input id="cfg-model" placeholder="e.g. deepseek/deepseek-chat" /></div>
       <div class="row"><label>API key</label><input id="cfg-key" type="password" placeholder="stays in this browser — never enters the VM" /></div>
+      <div class="row"><label></label><span id="cfg-key-note">A provider key is stored in this browser. With Ferrule, your keys stay in Ferrule's vault and this field holds a revocable frl_ token.</span></div>
       <div class="row"><label>Egress</label><input id="cfg-egress-url" placeholder="your nakli-egress Worker, e.g. https://nakli-egress.you.workers.dev — optional" /></div>
       <div class="row"><label>Secret</label><input id="cfg-egress-secret" type="password" placeholder="the Worker's EGRESS_SECRET" /></div>
       <div class="row"><label>Hosts</label><input id="cfg-egress-hosts" placeholder="hosts sent through the Worker (comma-separated; default list when empty)" /></div>
       <div class="row actions">
-        <button id="cfg-nano">use on-device Nano (GP only)</button>
         <button id="cfg-save">save</button>
         <span id="cfg-note"></span>
       </div>
@@ -218,6 +221,40 @@
         };
       });
 
+      // ---- agent tier config: IndexedDB only (the SW reads it there) ----
+      const kv = (mode, fn) => new Promise((resolve, reject) => {
+        const open = indexedDB.open('karkhana', 1);
+        open.onupgradeneeded = () => open.result.createObjectStore('kv');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const tx = open.result.transaction('kv', mode);
+          const req = fn(tx.objectStore('kv'));
+          tx.oncomplete = () => resolve(req.result);
+          tx.onerror = () => reject(tx.error);
+        };
+      });
+      let agentConfig = null;
+      // Earlier builds also kept the key in localStorage; move it, then drop that copy.
+      const agentConfigReady = (async () => {
+        try {
+          const legacy = localStorage.getItem('karkhana-ai-agent');
+          if (legacy) { await kv('readwrite', (store) => store.put(JSON.parse(legacy), 'ai-agent')); localStorage.removeItem('karkhana-ai-agent'); }
+          agentConfig = (await kv('readonly', (store) => store.get('ai-agent'))) || null;
+        } catch (e) { console.warn('karkhana: agent config unavailable', e); }
+      })();
+
+      // Endpoints carry no /v1: the bridge appends the guest's own path.
+      const AI_PRESETS = {
+        ferrule:    { label: 'Ferrule (keys stay in Ferrule)', endpoint: 'http://127.0.0.1:8899', key: 'frl_ token from `ferrule key karkhana`' },
+        ollama:     { label: 'Ollama', endpoint: 'http://127.0.0.1:11434', key: 'no key; allow the origin with OLLAMA_ORIGINS' },
+        lmstudio:   { label: 'LM Studio', endpoint: 'http://127.0.0.1:1234', key: 'no key' },
+        llamacpp:   { label: 'llama.cpp server', endpoint: 'http://127.0.0.1:8080', key: 'no key' },
+        openrouter: { label: 'OpenRouter', endpoint: 'https://openrouter.ai/api', key: 'sk-or-… key' },
+        openai:     { label: 'OpenAI', endpoint: 'https://api.openai.com', key: 'sk-… key' },
+        anthropic:  { label: 'Anthropic', endpoint: 'https://api.anthropic.com', key: 'sk-ant-… key' },
+        nano:       { label: 'On-device Gemini Nano (GP only)', endpoint: 'builtin:nano', model: 'gemini-nano', key: 'no key' },
+      };
+
       // ---- agent face: window.karkhana (same seam the v86 build exposed) ----
       window.karkhana = {
         engine: 'qemu-wasm',
@@ -270,18 +307,15 @@
             },
           },
           agent: {
-            get config() { try { return JSON.parse(localStorage.getItem('karkhana-ai-agent')) || null; } catch (e) { return null; } },
-            // {endpoint, model, key} — key stays browser-side; mirrored to IDB so the
-            // SW bridge (api.karkhana.internal) can inject Authorization for the guest.
-            set config(c) {
-              localStorage.setItem('karkhana-ai-agent', JSON.stringify(c));
-              const open = indexedDB.open('karkhana', 1);
-              open.onupgradeneeded = () => open.result.createObjectStore('kv');
-              open.onsuccess = () => open.result.transaction('kv', 'readwrite').objectStore('kv').put(c, 'ai-agent');
-            },
+            // {endpoint, model, key}. One copy, in IndexedDB, where the SW bridge
+            // (api.karkhana.internal) reads it to authorize the guest's calls.
+            get config() { return agentConfig; },
+            set config(c) { agentConfig = c; kv('readwrite', (store) => store.put(c, 'ai-agent')).catch((e) => console.warn('karkhana: agent config not saved', e)); },
+            presets: AI_PRESETS,
           },
           // naklios rule: wantsAgent -> endpoint or nothing; GP -> Nano first.
           resolve: async (wantsAgent) => {
+            await agentConfigReady;
             const agentCfg = window.karkhana.ai.agent.config;
             if (wantsAgent) return agentCfg ? { tier: 'agent', ...agentCfg } : null;
             const avail = await window.karkhana.ai.gp.probe();
@@ -318,11 +352,21 @@
         },
       };
 
-      // ---- settings panel (writes karkhana.ai.agent.config -> localStorage + IDB) ----
+      // ---- settings panel (writes karkhana.ai.agent.config -> IDB, egress -> localStorage) ----
       {
         const panel = document.getElementById('cfgpanel');
         const $ = (id) => document.getElementById(id);
-        const load = () => {
+        for (const [id, preset] of Object.entries(AI_PRESETS)) $('cfg-preset').add(new Option(preset.label, id));
+        $('cfg-preset').addEventListener('change', () => {
+          const preset = AI_PRESETS[$('cfg-preset').value];
+          if (!preset) return;
+          $('cfg-endpoint').value = preset.endpoint;
+          if (preset.model) $('cfg-model').value = preset.model;
+          $('cfg-key').value = '';
+          $('cfg-key').placeholder = preset.key;
+        });
+        const load = async () => {
+          await agentConfigReady;
           const c = window.karkhana.ai.agent.config || {};
           $('cfg-endpoint').value = c.endpoint || ''; $('cfg-model').value = c.model || ''; $('cfg-key').value = c.key || '';
           const e = egressConfig.get() || {};
@@ -330,7 +374,6 @@
           $('cfg-egress-hosts').value = (e.hosts || []).join(', ');
         };
         $('cfgbtn').addEventListener('click', () => { panel.hidden = !panel.hidden; if (!panel.hidden) load(); });
-        $('cfg-nano').addEventListener('click', () => { $('cfg-endpoint').value = 'builtin:nano'; $('cfg-model').value = 'gemini-nano'; $('cfg-key').value = ''; });
         $('cfg-save').addEventListener('click', () => {
           window.karkhana.ai.agent.config = { endpoint: $('cfg-endpoint').value.trim(), model: $('cfg-model').value.trim(), key: $('cfg-key').value.trim() };
           egressConfig.set({ workerUrl: $('cfg-egress-url').value.trim(), secret: $('cfg-egress-secret').value.trim(),
@@ -436,6 +479,12 @@
             try { mod.FS.mkdir('/kdisk'); } catch (e) {}
             mod.FS.writeFile('/kdisk/disk.qcow2', guestDisk.template);
           });
+          // Third-party agents (aider, OpenCode, Claude Code, the OpenAI and Anthropic
+          // SDKs) find the bridge through the standard variables. The key is a
+          // placeholder: the SW swaps in the real one for this host only.
+          for (const line of ['OPENAI_BASE_URL=http://api.karkhana.internal/v1', 'OPENAI_API_BASE=http://api.karkhana.internal/v1',
+            'OPENAI_API_KEY=karkhana-bridge', 'ANTHROPIC_BASE_URL=http://api.karkhana.internal', 'ANTHROPIC_API_KEY=karkhana-bridge'])
+            info += 'env: ' + line + '\n';
           if (disk) {
             info += 'disk: vdb\n';
             window.addEventListener('pagehide', () => { try { disk.flush(); } catch (e) {} });

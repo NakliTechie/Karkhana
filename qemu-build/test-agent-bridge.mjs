@@ -140,6 +140,43 @@ test('the key becomes the Authorization header and never enters the body', async
   assert.ok(!calls[0].body.includes('sk-test-123'));
 });
 
+test("the guest's placeholder bearer token is replaced, never forwarded", async () => {
+  const { calls, fetchImpl } = recorder();
+  const dispatch = worker({ endpoint: 'http://127.0.0.1:8899', model: 'everyday', key: 'frl_test' }, fetchImpl);
+  const request = chat(guestPayload());
+  request.headers.set('Authorization', 'Bearer karkhana-bridge');
+  await dispatch(request);
+  assert.equal(calls[0].init.headers.get('authorization'), 'Bearer frl_test');
+  assert.equal(calls[0].init.headers.get('x-api-key'), null);
+});
+
+test('an Anthropic-protocol call gets the key as x-api-key, and only there', async () => {
+  const { calls, fetchImpl } = recorder();
+  const dispatch = worker({ endpoint: 'https://api.anthropic.com', key: 'sk-ant-test' }, fetchImpl);
+  await dispatch(new Request(AI + '/v1/messages', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': 'karkhana-bridge', 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 8, messages: [] }) }));
+  assert.equal(calls[0].target, 'https://api.anthropic.com/v1/messages');
+  assert.equal(calls[0].init.headers.get('x-api-key'), 'sk-ant-test');
+  assert.equal(calls[0].init.headers.get('authorization'), null);
+  assert.equal(calls[0].init.headers.get('anthropic-dangerous-direct-browser-access'), 'true');
+  assert.equal(JSON.parse(calls[0].body).model, 'claude-sonnet-5', 'messages bodies are not rewritten');
+});
+
+test('the Anthropic browser opt-in goes to anthropic.com only', async () => {
+  const { calls, fetchImpl } = recorder();
+  await worker({ endpoint: 'https://openrouter.ai/api', key: 'k' }, fetchImpl)(chat(guestPayload()));
+  assert.equal(calls[0].init.headers.get('anthropic-dangerous-direct-browser-access'), null);
+});
+
+test('with no key configured, the placeholder passes through for keyless runtimes', async () => {
+  const { calls, fetchImpl } = recorder();
+  const request = chat(guestPayload());
+  request.headers.set('Authorization', 'Bearer karkhana-bridge');
+  await worker({ endpoint: 'http://127.0.0.1:11434', model: 'qwen3.5:4b' }, fetchImpl)(request);
+  assert.equal(calls[0].init.headers.get('authorization'), 'Bearer karkhana-bridge');
+});
+
 test('a missing endpoint answers 503 without an upstream call', async () => {
   const { calls, fetchImpl } = recorder();
   const dispatch = worker({ model: 'qwen3.5:4b' }, fetchImpl);

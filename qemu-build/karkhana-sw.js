@@ -77,7 +77,13 @@ const bridgeAi = async (request) => {
   const target = cfg.endpoint.replace(/\/$/, '') + url.pathname + url.search;
   const headers = new Headers(request.headers);
   headers.delete('host');
-  if (cfg.key) headers.set('Authorization', 'Bearer ' + cfg.key);
+  // The guest holds only a placeholder key (KARKHANA_KEY_PLACEHOLDER in its env).
+  // Anthropic-protocol clients send it as x-api-key, everyone else as a bearer
+  // token; the real key replaces it in the same header and enters no other.
+  if (cfg.key && headers.has('x-api-key')) headers.set('x-api-key', cfg.key);
+  else if (cfg.key) headers.set('Authorization', 'Bearer ' + cfg.key);
+  // Anthropic refuses browser-originated calls without this opt-in header.
+  if (/(^|\.)anthropic\.com$/.test(new URL(target).hostname)) headers.set('anthropic-dangerous-direct-browser-access', 'true');
   const body = (request.method === 'GET' || request.method === 'HEAD') ? undefined
     : await withConfiguredModel(request, url, cfg);
   if (typeof body === 'string') headers.delete('content-length'); // rewritten; fetch recomputes it
