@@ -65,6 +65,13 @@
       <div class="row"><label>Model</label><input id="cfg-model" placeholder="e.g. deepseek/deepseek-chat" /></div>
       <div class="row"><label>API key</label><input id="cfg-key" type="password" placeholder="stays in this browser — never enters the VM" /></div>
       <div class="row"><label></label><span id="cfg-key-note">A provider key is stored in this browser. With Ferrule, your keys stay in Ferrule's vault and this field holds a revocable frl_ token.</span></div>
+      <div class="row"><label>Disk</label><span id="cfg-disk-status">…</span></div>
+      <div class="row actions" id="cfg-disk-actions">
+        <button id="cfg-backup">back up to a folder…</button>
+        <button id="cfg-backup-now">back up now</button>
+        <button id="cfg-backup-resume">resume backups</button>
+        <button id="cfg-restore">restore from a folder…</button>
+      </div>
       <div class="row"><label>Egress</label><input id="cfg-egress-url" placeholder="your nakli-egress Worker, e.g. https://nakli-egress.you.workers.dev — optional" /></div>
       <div class="row"><label>Secret</label><input id="cfg-egress-secret" type="password" placeholder="the Worker's EGRESS_SECRET" /></div>
       <div class="row"><label>Hosts</label><input id="cfg-egress-hosts" placeholder="hosts sent through the Worker (comma-separated; default list when empty)" /></div>
@@ -106,6 +113,7 @@
       import initEmscriptenModule from './out.js';
       import { createBrowserFetchBridge } from './browser-fetch.js';
       import { fetchDiskTemplate, mountOpfsDisk, openOpfsDisk } from './opfs-disk.js';
+      import { createBackup, pendingRestore } from './backup.js';
       import { DEFAULT_EGRESS_HOSTS, createEgress } from './egress.js';
 
       const stateEl = document.getElementById('vmstate');
@@ -233,6 +241,8 @@
           tx.onerror = () => reject(tx.error);
         };
       });
+      const kvGet = (key) => kv('readonly', (store) => store.get(key));
+      const kvPut = (key, value) => kv('readwrite', (store) => store.put(value, key));
       let agentConfig = null;
       // Earlier builds also kept the key in localStorage; move it, then drop that copy.
       const agentConfigReady = (async () => {
@@ -419,7 +429,9 @@
         let reason = 'requested with ?disk=scratch';
         if (new URLSearchParams(location.search).get('disk') !== 'scratch') {
           try {
-            const disk = await openOpfsDisk({ workerUrl: new URL('./opfs-disk-worker.js', location.href), templateUrl: DISK_TEMPLATE });
+            // A restore chosen in the ⚙ panel (backup.js) lands here after its reload.
+            const restoreFrom = await pendingRestore({ kvGet }).catch(() => null);
+            const disk = await openOpfsDisk({ workerUrl: new URL('./opfs-disk-worker.js', location.href), templateUrl: DISK_TEMPLATE, restoreFrom });
             return { mode: 'persistent', disk };
           } catch (error) {
             reason = error.code === 'busy' ? 'another Karkhana tab is using the disk' : error.message;
@@ -464,14 +476,63 @@
             get stats() { return disk ? { size: disk.size, ...disk.stats } : null; },
             flush: () => disk?.flush(),
             // Deletes the disk and everything on it; the reload starts a new one.
-            forget: async () => {
-              disk?.close();
-              const root = await navigator.storage.getDirectory();
-              const dir = await root.getDirectoryHandle('karkhana-disk', { create: true });
-              await dir.removeEntry('disk.qcow2').catch((e) => { if (e.name !== 'NotFoundError') throw e; });
-              location.reload();
-            },
+            forget: async () => { await dropDisk(); location.reload(); },
+            backup: null,
           };
+          async function dropDisk() {
+            disk?.close();
+            const root = await navigator.storage.getDirectory();
+            const dir = await root.getDirectoryHandle('karkhana-disk', { create: true });
+            for (const name of ['disk.qcow2', 'disk.qcow2.dirty', 'disk.qcow2.id'])
+              await dir.removeEntry(name).catch((e) => { if (e.name !== 'NotFoundError') throw e; });
+          }
+          // The Folder rung: a replica of this disk in a folder the user picks.
+          const diskStatusEl = document.getElementById('cfg-disk-status');
+          const showDiskStatus = (b) => {
+            const saved = b && b.savedAt ? ' · saved ' + new Date(b.savedAt).toLocaleString() : '';
+            const backup = !b || b.state === 'off' ? 'no folder backup'
+              : b.state === 'needs-permission' ? 'backups to ' + b.folder + ' paused: click "resume backups"'
+              : b.state === 'other-disk' ? b.folder + ' holds another disk\'s backup: restore it, or pick another folder'
+              : b.state === 'error' ? 'backup error: ' + b.lastError
+              : 'backing up to ' + b.folder + saved;
+            diskStatusEl.textContent = 'disk: ' + guestDisk.mode + (disk ? ' · ' + backup : ' · ' + guestDisk.reason);
+          };
+          if (disk) {
+            const backup = createBackup({ disk, workerUrl: new URL('./replica-worker.js', location.href), kvGet, kvPut, onStatus: showDiskStatus });
+            if (disk.restored) backup.clearPendingRestore();
+            window.karkhana.disk.backup = {
+              attach: (dir) => backup.attach(dir),
+              now: () => backup.now(),
+              resume: () => backup.resume(),
+              detach: () => backup.detach(),
+              describe: (dir) => backup.describe(dir),
+              // Swaps this browser's disk for the folder's backup, through a reload.
+              restore: async (dir) => { await backup.restore(dir); await dropDisk(); location.reload(); },
+              get status() { return backup.status; },
+            };
+            backup.resumeIfPermitted().catch((e) => console.warn('karkhana: backup not resumed', e));
+          }
+          showDiskStatus(window.karkhana.disk.backup?.status);
+          {
+            const pick = () => window.showDirectoryPicker({ mode: 'readwrite', id: 'karkhana-backup' });
+            const act = (fn) => async () => { try { await fn(); } catch (e) { if (e.name !== 'AbortError') diskStatusEl.textContent = 'disk: ' + e.message; } };
+            const $ = (id) => document.getElementById(id);
+            if (!disk || !window.showDirectoryPicker) $('cfg-disk-actions').hidden = true;
+            $('cfg-backup').addEventListener('click', act(async () => window.karkhana.disk.backup.attach(await pick())));
+            $('cfg-backup-now').addEventListener('click', act(async () => window.karkhana.disk.backup.now()));
+            $('cfg-backup-resume').addEventListener('click', act(async () => window.karkhana.disk.backup.resume()));
+            // Two clicks, no native dialog: the first picks and describes, the second replaces.
+            let armed = null;
+            $('cfg-restore').addEventListener('click', act(async () => {
+              if (armed && Date.now() < armed.until) { const dir = armed.dir; armed = null; await window.karkhana.disk.backup.restore(dir); return; }
+              const dir = await pick();
+              const found = await window.karkhana.disk.backup.describe(dir);
+              if (!found) throw new Error('no Karkhana disk backup in that folder');
+              armed = { dir, until: Date.now() + 10_000 };
+              diskStatusEl.textContent = 'disk: restoring replaces this browser\'s disk with the backup saved '
+                + new Date(found.savedAt).toLocaleString() + '. Click "restore from a folder…" again within 10 s to confirm.';
+            }));
+          }
           // Not awaited: Firefox answers persist() with a permission prompt.
           navigator.storage?.persist?.().then((v) => { window.karkhana.disk.persisted = v; }, () => {});
           Module['preRun'].push((mod) => {

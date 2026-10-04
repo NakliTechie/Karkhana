@@ -22,7 +22,7 @@ The first visit downloads about 280 MiB of engine assets. The browser caches the
 | **Languages** | Python 3.11.2, Node 22.23.3, sqlite3, git, curl |
 | **Python packages** | `kpip <pkg>` — `uv` tuned for the in-page network path. Plain `pip` stalls against the proxy; `uv` does not |
 | **Node packages** | `npm install -g` works against the real registry |
-| **Persistence** | Writes land on a 16 GiB disk in this browser's origin-private storage (OPFS), so installs and files survive closing the tab. A new disk costs about 6.4 MiB and grows as used. A second tab, or `?disk=scratch`, runs on scratch storage that the tab discards; `ksave` still saves a scratch session |
+| **Persistence** | Writes land on a 16 GiB disk in this browser's origin-private storage (OPFS), so installs and files survive closing the tab. A new disk costs about 6.4 MiB and grows as used. ⚙ → Disk keeps a backup in a folder you pick and restores from it. A second tab, or `?disk=scratch`, runs on scratch storage that the tab discards; `ksave` still saves a scratch session |
 | **Agent** | `/usr/bin/agent "task"` — an OpenAI-protocol tool loop with `run_command` / `read_file` / `write_file` / `list_directory`. Pick a provider under ⚙ (Ferrule, Ollama, OpenRouter, Anthropic, …). aider, OpenCode, Claude Code and the SDKs reach it through the standard `OPENAI_*`/`ANTHROPIC_*` variables with a placeholder key; the real key never enters the VM. With Ferrule, provider keys stay in Ferrule and the browser holds only a revocable token |
 
 Bun 1.4.2 executes JavaScript, cryptographic checks, and subprocesses on the x86-64-v2 guest CPU.
@@ -84,6 +84,7 @@ karkhana.shell.onData(cb)              // subscribe to guest output
 karkhana.shell.size                    // { cols, rows } — the guest pty follows it
 karkhana.disk                          // { mode, reason, created, persisted, stats } — the guest disk
 karkhana.disk.forget()                 // delete the disk; the reload starts a fresh one
+karkhana.disk.backup.attach(dirHandle)  // back up to a folder; also now(), restore(dir), status
 karkhana.persist.pull()                // mirror a ksave archive to OPFS now
 karkhana.persist.forget()              // drop saved state
 karkhana.net                           // { mode, cert } — which network path is live

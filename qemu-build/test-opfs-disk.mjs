@@ -48,6 +48,17 @@ class FileHandle {
     return new SyncHandle(this.file);
   }
   async move(name) { const to = path.join(path.dirname(this.file), name); fs.renameSync(this.file, to); this.file = to; }
+  async getFile() {
+    if (fs.existsSync(lockOf(this.file))) throw err('NoModificationAllowedError', 'locked');
+    const bytes = fs.readFileSync(this.file);
+    return { size: bytes.length, text: async () => bytes.toString(), arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) };
+  }
+  // Like the real API: the file is replaced only on close().
+  async createWritable() {
+    const parts = [];
+    return { write: async (b) => { parts.push(Buffer.from(typeof b === 'string' ? b : b instanceof ArrayBuffer ? new Uint8Array(b) : b)); },
+             close: async () => { fs.writeFileSync(this.file + '.swap', Buffer.concat(parts)); fs.renameSync(this.file + '.swap', this.file); } };
+  }
 }
 class DirHandle {
   constructor(dir) { this.dir = dir; }
@@ -61,6 +72,8 @@ class DirHandle {
     if (!fs.existsSync(f)) { if (!create) throw err('NotFoundError', name); fs.writeFileSync(f, ''); }
     return new FileHandle(f);
   }
+  async removeEntry(name) { fs.rmSync(path.join(this.dir, name), { recursive: true }); }
+  async *keys() { for (const n of fs.readdirSync(this.dir)) if (!n.endsWith('.swap')) yield n; }
 }
 Object.defineProperty(globalThis, 'navigator', { value: { storage: { getDirectory: async () => new DirHandle(root) } } });
 globalThis.fetch = async () => new Response(templateBytes);
@@ -81,7 +94,7 @@ function workerClass(root, lockDir, bootstrap, { quotaBytes = 0, template }) {
       this.thread.on('message', (data) => this.onmessage?.({ data }));
       this.thread.on('error', (error) => this.onerror?.({ message: String(error) }));
     }
-    postMessage(data) { this.thread.postMessage(data); }
+    postMessage(data, transfer) { this.thread.postMessage(data, transfer); }
     terminate() { this.thread.terminate(); }
   };
 }
@@ -122,7 +135,8 @@ test('a new disk is seeded from the gzip template and published atomically', asy
     const disk = await open();
     assert.equal(disk.created, true);
     assert.equal(disk.size, image.length);
-    assert.deepEqual(await readdir(path.join(root, 'karkhana-disk')), ['disk.qcow2']);
+    assert.deepEqual((await readdir(path.join(root, 'karkhana-disk'))).sort(), ['disk.qcow2', 'disk.qcow2.dirty', 'disk.qcow2.id'], 'no .part left behind');
+    assert.match(disk.diskId, /^[0-9a-f-]{36}$/);
     const back = new Uint8Array(image.length);
     assert.equal(disk.read(back, 0, image.length, 0), image.length);
     assert.deepEqual(back, image);

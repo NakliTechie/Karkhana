@@ -11,7 +11,7 @@
 // sparse file would not do: OPFS quota counts a file's full logical length.
 
 export const BOUNCE_BYTES = 1 << 20;
-export const OP = { READ: 1, WRITE: 2, TRUNCATE: 3, FLUSH: 4, CLOSE: 5 };
+export const OP = { READ: 1, WRITE: 2, TRUNCATE: 3, FLUSH: 4, CLOSE: 5, SNAPSHOT: 6, MARK_ALL: 7 };
 export const STATE = { IDLE: 0, REQUEST: 1, DONE: 2 };
 // Int32 control slots, and Float64 slots for 53-bit offsets.
 export const CTL = { STATE: 0, OP: 1, ERRNO: 2 };
@@ -47,8 +47,10 @@ export async function fetchDiskTemplate(url) {
 
 // The main-thread side. Every method is synchronous, as Emscripten's FS needs.
 export class OpfsDisk {
-  constructor({ worker, ctl, meta, bounce, size, created }) {
-    Object.assign(this, { worker, ctl, meta, bounce, size, created });
+  // replicaPort and repl connect a replica (replica-worker.js) to the disk
+  // worker's snapshots; see chunk-tracker.js.
+  constructor({ worker, ctl, meta, bounce, size, created, restored = false, diskId = null, replicaPort = null, repl = null }) {
+    Object.assign(this, { worker, ctl, meta, bounce, size, created, restored, diskId, replicaPort, repl });
     this.dead = false;
     this.stats = { reads: 0, writes: 0, bytesRead: 0, bytesWritten: 0, flushes: 0, errors: 0 };
   }
@@ -116,6 +118,12 @@ export class OpfsDisk {
     this.stats.flushes++;
   }
 
+  // Starts a replica snapshot; returns its chunk count, or -1 while one is open.
+  snapshot() { return this.call(OP.SNAPSHOT); }
+
+  // Marks every chunk dirty, so the next snapshot copies the whole disk.
+  markAll() { this.call(OP.MARK_ALL); }
+
   close() {
     if (this.dead) return;
     try { this.call(OP.CLOSE); } finally {
@@ -128,25 +136,29 @@ export class OpfsDisk {
 // Opens (creating from the template when absent) dir/name in OPFS. Rejects
 // with error.code 'busy' when another tab holds the disk, 'unsupported' when
 // the browser lacks OPFS sync handles, and 'failed' otherwise.
-export async function openOpfsDisk({ workerUrl, templateUrl, dir = 'karkhana-disk', name = 'disk.qcow2' }) {
+export async function openOpfsDisk({ workerUrl, templateUrl, restoreFrom = null, dir = 'karkhana-disk', name = 'disk.qcow2' }) {
   if (typeof SharedArrayBuffer === 'undefined' || !navigator.storage?.getDirectory) {
     throw Object.assign(new Error('this browser has no OPFS or shared memory'), { code: 'unsupported' });
   }
   const ctl = new Int32Array(new SharedArrayBuffer(4 * 4));
   const meta = new Float64Array(new SharedArrayBuffer(8 * 4));
   const bounce = new SharedArrayBuffer(BOUNCE_BYTES);
+  const repl = new Int32Array(new SharedArrayBuffer(4 * 4));
+  const channel = new MessageChannel();
   const worker = new Worker(workerUrl, { type: 'module', name: 'karkhana-disk' });
   const opened = await new Promise((resolve) => {
     worker.onmessage = ({ data }) => resolve(data);
     worker.onerror = (event) => resolve({ ok: false, code: 'failed', error: event.message || 'disk worker failed to load' });
-    worker.postMessage({ ctl: ctl.buffer, meta: meta.buffer, bounce, dir, name, templateUrl: String(templateUrl) });
+    worker.postMessage({ ctl: ctl.buffer, meta: meta.buffer, bounce, repl: repl.buffer, replicaPort: channel.port1, restoreFrom,
+      dir, name, templateUrl: String(templateUrl) }, [channel.port1]);
   });
   worker.onmessage = worker.onerror = null;
   if (!opened.ok) {
     worker.terminate();
     throw Object.assign(new Error(opened.error), { code: opened.code });
   }
-  return new OpfsDisk({ worker, ctl, meta, bounce, size: opened.size, created: opened.created });
+  return new OpfsDisk({ worker, ctl, meta, bounce, size: opened.size, created: opened.created, restored: opened.restored,
+    diskId: opened.diskId, replicaPort: channel.port2, repl });
 }
 
 // Mounts a one-file filesystem at mountpoint whose file is the disk. fsync on

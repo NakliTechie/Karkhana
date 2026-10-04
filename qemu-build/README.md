@@ -272,6 +272,7 @@ node qemu-build/test-agent-bridge.mjs
 python3 qemu-build/test-karkhana-tty.py
 node qemu-build/test-opfs-disk.mjs
 node qemu-build/test-egress.mjs
+node qemu-build/test-replica.mjs
 ```
 
 The first suite includes the actual Python adapter and client against the JS
@@ -362,6 +363,34 @@ The template and runtime disk must keep the same 16 GiB virtual size.
 A second tab cannot open the disk; OPFS grants one sync handle per file. After
 3 s of retries it boots in scratch mode, and the header says so. The retry
 covers a reload, where the previous page can still hold the handle.
+
+### Folder backups (the storage ladder's second rung)
+
+The OPFS disk stays the live copy; only OPFS gives QEMU synchronous I/O. A folder
+the user picks under ⚙ → Disk holds a replica, kept current every 60 s while the
+disk changes, or on "back up now". `disk/chunk-tracker.js` in the disk worker
+marks 4 MiB chunks dirty (a bitmap in `disk.qcow2.dirty`). A snapshot takes the
+dirty set at one instant and streams it out in idle moments. A guest write into
+a chunk not yet sent first keeps that chunk's snapshot-time bytes, so every
+backup is crash-consistent, like a closed tab.
+
+The page relays the chunks to `disk/replica-worker.js`. `disk/replica.js` stores
+each one once under its SHA-256 in `<folder>/karkhana-disk/chunks/`, then
+commits `manifest.json`. A failed snapshot leaves the last manifest standing
+and turns its chunks dirty again; chunks no manifest names are deleted. A folder
+holding another disk's backup (`disk.qcow2.id` differs) is refused, never
+overwritten.
+
+"Restore from a folder…" swaps this browser's disk for a backup: two clicks, then
+a reload, because the disk can only change before QEMU opens it. The disk worker
+rebuilds `disk.qcow2` from the manifest, checking every chunk's hash, and the
+disk keeps its identity. Browsers may ask again for folder permission on a later
+visit; ⚙ then shows "resume backups". `karkhana.disk.backup` exposes `attach`,
+`now`, `resume`, `detach`, `restore`, `describe` and `status`.
+
+`node qemu-build/test-replica.mjs` checks the tracker and replica on the host.
+`node qemu-build/test-backup-browser.mjs` boots the page, backs up to an OPFS
+directory (headless Chrome has no folder picker), and restores from it.
 
 `ksave`/`krestore` remain for scratch sessions. A persistent boot does not
 stage `state.tar`, because restoring it would roll the disk back. The one

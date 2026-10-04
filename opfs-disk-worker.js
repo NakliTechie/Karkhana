@@ -1,36 +1,44 @@
 // Holds the persistent disk's OPFS sync access handle and serves the main
 // thread's requests (see opfs-disk.js). Runs as a module worker.
 import { CTL, ERRNO, META, OP, STATE, fetchDiskTemplate, isQcow2 } from './opfs-disk.js';
+import { ChunkTracker } from './chunk-tracker.js';
+import { restoreReplica } from './replica.js';
 
 // A write marks the handle dirty; it is flushed after this much idle time.
 // Tab closes need no flush (written bytes are already in the file); an OS
 // crash does, and so does the guest's own fsync.
 const FLUSH_DELAY_MS = 1000;
+// While a snapshot is open, idle moments of this length send its next chunks.
+const PUMP_MS = 10;
 
 self.onmessage = async ({ data }) => {
   self.onmessage = null;
-  let handle;
-  let created = false;
+  let disk;
   try {
-    ({ handle, created } = await open(data));
+    disk = await open(data);
   } catch (error) {
     const code = error.name === 'NoModificationAllowedError' ? 'busy' : 'failed';
     self.postMessage({ ok: false, code, error: `${error.name}: ${error.message}` });
     return;
   }
-  self.postMessage({ ok: true, size: handle.getSize(), created });
-  serve(handle, new Int32Array(data.ctl), new Float64Array(data.meta), data.bounce);
+  const { handle, created, restored, diskId } = disk;
+  self.postMessage({ ok: true, size: handle.getSize(), created, restored, diskId });
+  serve(disk, new Int32Array(data.ctl), new Float64Array(data.meta), data.bounce, data.replicaPort, new Int32Array(data.repl));
 };
 
-async function open({ dir, name, templateUrl }) {
+const missing = (error) => { if (error.name === 'NotFoundError') return null; throw error; };
+
+async function open({ dir, name, templateUrl, restoreFrom }) {
   const root = await navigator.storage.getDirectory();
   const folder = await root.getDirectoryHandle(dir, { create: true });
-  let file = await folder.getFileHandle(name).catch((error) => {
-    if (error.name === 'NotFoundError') return null;
-    throw error;
-  });
+  let file = await folder.getFileHandle(name).catch(missing);
   let created = false;
-  if (!file) {
+  let restored = false;
+  let diskId = null;
+  if (!file && restoreFrom) {
+    ({ file, diskId } = await restore(folder, name, restoreFrom));
+    restored = true;
+  } else if (!file) {
     file = await seed(folder, name, templateUrl);
     created = true;
   }
@@ -41,7 +49,39 @@ async function open({ dir, name, templateUrl }) {
     handle.close();
     throw new Error(`${dir}/${name} is not a qcow2 image`);
   }
-  return { handle, created };
+  diskId = await identity(folder, name, diskId || (created ? crypto.randomUUID() : null));
+  // One byte per chunk, which the next replica snapshot must carry. A disk with
+  // no bitmap yet (older, or just created) starts all-dirty.
+  const bitmap = await exclusive(await folder.getFileHandle(name + '.dirty', { create: true }));
+  const kept = bitmap.getSize() > 0 && !created && !restored ? new Uint8Array(bitmap.getSize()) : null;
+  if (kept) bitmap.read(kept, { at: 0 });
+  if (restored) { bitmap.truncate(0); }
+  return { handle, bitmap, dirty: kept, created, restored, diskId };
+}
+
+// A stable id per disk, so a folder backup is never overwritten by another disk.
+async function identity(folder, name, fresh) {
+  const file = await folder.getFileHandle(name + '.id').catch(missing);
+  if (file && !fresh) return (await (await file.getFile()).text()).trim() || identity(folder, name, crypto.randomUUID());
+  const id = fresh || crypto.randomUUID();
+  const writable = await (await folder.getFileHandle(name + '.id', { create: true })).createWritable();
+  await writable.write(id);
+  await writable.close();
+  return id;
+}
+
+// Like seed(): the restored image appears under its real name only once complete.
+async function restore(folder, name, from) {
+  const part = await folder.getFileHandle(name + '.part', { create: true });
+  const handle = await part.createSyncAccessHandle();
+  let diskId;
+  try {
+    ({ diskId } = await restoreReplica(from, handle));
+  } finally {
+    handle.close();
+  }
+  await part.move(name);
+  return { file: await folder.getFileHandle(name), diskId };
 }
 
 // On a reload the previous page's worker can still hold the handle for a
@@ -77,13 +117,30 @@ async function seed(folder, name, templateUrl) {
   return folder.getFileHandle(name);
 }
 
-function serve(handle, ctl, meta, bounce) {
+function serve({ handle, bitmap, dirty: kept }, ctl, meta, bounce, replicaPort, repl) {
+  const chunkOf = (index, size) => {
+    const at = index * tracker.chunkBytes;
+    const bytes = new Uint8Array(Math.max(0, Math.min(tracker.chunkBytes, size - at)));
+    if (bytes.length) handle.read(bytes, { at });
+    return bytes;
+  };
+  const tracker = new ChunkTracker({
+    size: handle.getSize(), dirty: kept, readChunk: chunkOf, repl,
+    persist: (map) => { bitmap.truncate(map.length); bitmap.write(map, { at: 0 }); },
+    send: (message, transfer) => replicaPort.postMessage(message, transfer),
+  });
   let dirty = false;
+  let lastWrite = 0;
+  let lastPump = 0;
   for (;;) {
-    const woke = Atomics.wait(ctl, CTL.STATE, STATE.IDLE, dirty ? FLUSH_DELAY_MS : Infinity);
+    const wait = tracker.active ? PUMP_MS : dirty ? FLUSH_DELAY_MS : Infinity;
+    const woke = Atomics.wait(ctl, CTL.STATE, STATE.IDLE, wait);
     if (woke === 'timed-out') {
-      try { handle.flush(); } catch (error) { console.error('karkhana disk: flush failed', error); }
-      dirty = false;
+      if (tracker.active) { tracker.pump(); lastPump = Date.now(); }
+      if (dirty && Date.now() - lastWrite >= FLUSH_DELAY_MS) {
+        try { handle.flush(); bitmap.flush(); } catch (error) { console.error('karkhana disk: flush failed', error); }
+        dirty = false;
+      }
       continue;
     }
     if (Atomics.load(ctl, CTL.STATE) !== STATE.REQUEST) continue;
@@ -98,13 +155,23 @@ function serve(handle, ctl, meta, bounce) {
           result = handle.read(new Uint8Array(bounce, 0, len), { at: pos });
           break;
         case OP.WRITE:
+          tracker.beforeWrite(pos, len);
           result = handle.write(new Uint8Array(bounce, 0, len), { at: pos });
           dirty = true;
+          lastWrite = Date.now();
           break;
         case OP.TRUNCATE:
+          tracker.beforeTruncate(handle.getSize(), pos);
           handle.truncate(pos);
           result = handle.getSize();
           dirty = true;
+          lastWrite = Date.now();
+          break;
+        case OP.SNAPSHOT:
+          result = tracker.begin(handle.getSize());
+          break;
+        case OP.MARK_ALL:
+          tracker.markAll();
           break;
         case OP.FLUSH:
           handle.flush();
@@ -113,6 +180,8 @@ function serve(handle, ctl, meta, bounce) {
         case OP.CLOSE:
           handle.flush();
           handle.close();
+          bitmap.flush();
+          bitmap.close();
           break;
         default:
           errno = ERRNO.EINVAL;
@@ -126,5 +195,7 @@ function serve(handle, ctl, meta, bounce) {
     Atomics.store(ctl, CTL.STATE, STATE.DONE);
     Atomics.notify(ctl, CTL.STATE);
     if (op === OP.CLOSE) return;
+    // Under steady guest I/O there is no idle moment; keep a snapshot moving.
+    if (tracker.active && Date.now() - lastPump >= PUMP_MS * 5) { tracker.pump(); lastPump = Date.now(); }
   }
 }
