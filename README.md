@@ -36,6 +36,8 @@ The guest gets a real NIC, not a shimmed `fetch`. Two modes, auto-selected at bo
 - **In-page fetch stack (zero-install, what the hosted site uses).** [gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock) compiled to wasm, with egress through the browser's own `fetch()`. Bounded by CORS, so PyPI and npm work; `apt`, `git` and GitHub releases do not.
 - **Relay (development).** Run `net/c2w-net -listen-ws localhost:8888` on your machine and the page picks it up, giving the guest real TCP/IP — plain `pip`, `git`, `apt`, anything.
 
+**Egress (optional).** Hosts that send no CORS headers — Debian mirrors, rustup, Go downloads, the crates index, GitHub releases — can go through your own [nakli-egress](https://github.com/NakliTechie/naklios/tree/main/nakli-egress) Worker on your Cloudflare account. Deploy it with `karkhana.naklitechie.com` in `ALLOW_ORIGINS` and the hosts in `ALLOWLIST`, then enter its URL and secret under ⚙ → Egress. Requests are signed; only the hosts you list go through it, and Karkhana runs no relay of its own.
+
 `kpip-fast` adds an opt-in path for public PyPI wheels. It sends requests over
 the existing 9p mount to browser `fetch()`. Downloads avoid guest external TCP
 and TLS. The browser parses, validates, and rewrites project metadata.

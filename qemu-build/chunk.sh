@@ -26,7 +26,7 @@ mkdir -p "$STAGE/engine"
 # manifest at runtime, so nothing is rewritten here.
 # Every one is required: a missing disk template or worker fails the boot, so
 # a stale build output stops here instead of publishing a broken page.
-for f in karkhana.html load.js out.js arg-module.js karkhana-sw.js browser-fetch.js pypi-metadata.js kfetch.py kpip_fast.py karkhana-tty.sh opfs-disk.js opfs-disk-worker.js kdisk.qcow2.gz c2w-net-proxy.wasm.gzip; do
+for f in karkhana.html load.js out.js arg-module.js karkhana-sw.js browser-fetch.js pypi-metadata.js egress.js kfetch.py kpip_fast.py karkhana-tty.sh opfs-disk.js opfs-disk-worker.js kdisk.qcow2.gz c2w-net-proxy.wasm.gzip; do
     [ -f "$SRC/$f" ] || { echo "FATAL: $SRC/$f missing" >&2; exit 1; }
     cp "$SRC/$f" "$STAGE/$f"
 done

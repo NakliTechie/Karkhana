@@ -102,6 +102,35 @@ Python 3.11 + uv (`kpip <pkg>` = tuned installer), Node 22, sqlite3, git, curl,
    egress via browser fetch(). CORS-bounded: PyPI/npm work (`kpip`, npm with
    `NODE_EXTRA_CA_CERTS=/.wasmenv/proxy.crt`); apt/git/GitHub-releases don't.
 
+### Egress through the user's Worker
+
+`net/egress.js` sends guest requests for listed hosts through naklios's
+`nakli-egress` Worker, deployed on the user's own Cloudflare account. The
+in-page stack calls `stackFetch` (`net/stack/stack.js`) for every guest HTTP
+request. A listed host goes to `window.karkhanaEgress`; any other host keeps
+the direct, CORS-simple browser fetch. The relay forwards the guest's own
+headers, including `Authorization`.
+
+Each request is an HMAC-signed envelope in the Worker's protocol
+(`nakli-egress/src/lib.js`). The Worker enforces its own allowlist, SSRF guard
+and replay window. It caps responses at 50 MB, so a GET without its own
+`Range` is fetched in 16 MiB ranges and reassembled. The Worker returns
+redirects instead of following them; `egress.js` follows each hop itself. A hop
+to an unlisted host leaves the relay.
+
+Configure under ⚙ → Egress, or `karkhana.egress.configure({ workerUrl, secret, hosts })`.
+An empty host list uses `DEFAULT_EGRESS_HOSTS` in `net/egress.js`.
+`karkhana.egress.status` reports requests, bytes and failures. A change applies
+to the next request without a reboot. The Worker's `ALLOW_ORIGINS` must name
+the page's origin.
+
+`node qemu-build/test-egress.mjs` runs `egress.js` against the real Worker module,
+in-process, with a fake upstream. `NAKLI_EGRESS` names the checkout. It covers the
+signing string, header relay, ranged bodies over the cap, redirects, POST bodies,
+and wrong-secret and off-allowlist failures. `node qemu-build/test-egress-browser.mjs`
+boots the page against a running Worker (`KARKHANA_EGRESS_URL`, `KARKHANA_EGRESS_SECRET`).
+It checks `apt-get install` and a GitHub release download.
+
 ### Direct PyPI downloads
 
 `kpip-fast PACKAGE` offers an opt-in package path over the existing `/persist`
@@ -242,6 +271,7 @@ node qemu-build/test-pty.mjs
 node qemu-build/test-agent-bridge.mjs
 python3 qemu-build/test-karkhana-tty.py
 node qemu-build/test-opfs-disk.mjs
+node qemu-build/test-egress.mjs
 ```
 
 The first suite includes the actual Python adapter and client against the JS

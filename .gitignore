@@ -22,6 +22,7 @@
 !arg-module.js
 !browser-fetch.js
 !pypi-metadata.js
+!egress.js
 !kfetch.py
 !kpip_fast.py
 !karkhana-tty.sh
@@ -61,6 +62,8 @@ qemu-build/*
 !qemu-build/test-karkhana-tty.py
 !qemu-build/test-terminal-size.mjs
 !qemu-build/test-opfs-disk.mjs
+!qemu-build/test-egress.mjs
+!qemu-build/test-egress-browser.mjs
 !qemu-build/test-persistent-disk.mjs
 !qemu-build/browser-harness.mjs
 !qemu-build/disk/
@@ -100,6 +103,7 @@ qemu-build/net/c2w-net-proxy/*
 !qemu-build/net/stack/
 !qemu-build/net/browser-fetch.js
 !qemu-build/net/pypi-metadata.js
+!qemu-build/net/egress.js
 qemu-build/net/stack/*
 !qemu-build/net/stack/stack.js
 !qemu-build/net/stack/stack-worker.js

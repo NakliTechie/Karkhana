@@ -61,6 +61,9 @@
       <div class="row"><label>Endpoint</label><input id="cfg-endpoint" placeholder="https://openrouter.ai/api  ·  or builtin:nano" /></div>
       <div class="row"><label>Model</label><input id="cfg-model" placeholder="e.g. deepseek/deepseek-chat" /></div>
       <div class="row"><label>API key</label><input id="cfg-key" type="password" placeholder="stays in this browser — never enters the VM" /></div>
+      <div class="row"><label>Egress</label><input id="cfg-egress-url" placeholder="your nakli-egress Worker, e.g. https://nakli-egress.you.workers.dev — optional" /></div>
+      <div class="row"><label>Secret</label><input id="cfg-egress-secret" type="password" placeholder="the Worker's EGRESS_SECRET" /></div>
+      <div class="row"><label>Hosts</label><input id="cfg-egress-hosts" placeholder="hosts sent through the Worker (comma-separated; default list when empty)" /></div>
       <div class="row actions">
         <button id="cfg-nano">use on-device Nano (GP only)</button>
         <button id="cfg-save">save</button>
@@ -100,6 +103,7 @@
       import initEmscriptenModule from './out.js';
       import { createBrowserFetchBridge } from './browser-fetch.js';
       import { fetchDiskTemplate, mountOpfsDisk, openOpfsDisk } from './opfs-disk.js';
+      import { DEFAULT_EGRESS_HOSTS, createEgress } from './egress.js';
 
       const stateEl = document.getElementById('vmstate');
       const overlay = document.getElementById('overlay');
@@ -287,6 +291,33 @@
         },
       };
 
+      // ---- egress: hosts without CORS headers go through the user's own Worker ----
+      // naklios's nakli-egress, deployed on the user's Cloudflare account (net/egress.js).
+      // stack.js reads window.karkhanaEgress per request, so a change applies live.
+      const egressConfig = {
+        get() { try { return JSON.parse(localStorage.getItem('karkhana-egress')) || null; } catch (e) { return null; } },
+        set(c) {
+          if (c && c.workerUrl && c.secret) localStorage.setItem('karkhana-egress', JSON.stringify(c));
+          else localStorage.removeItem('karkhana-egress');
+          applyEgress();
+        },
+      };
+      function applyEgress() {
+        const c = egressConfig.get();
+        try {
+          window.karkhanaEgress = c ? createEgress({ workerUrl: c.workerUrl, secret: c.secret, hosts: c.hosts?.length ? c.hosts : DEFAULT_EGRESS_HOSTS }) : null;
+        } catch (e) { window.karkhanaEgress = null; console.warn('karkhana: egress not configured', e); }
+      }
+      applyEgress();
+      // Agent face: the same configure the ⚙ panel's save uses; null clears it.
+      window.karkhana.egress = {
+        configure: (c) => egressConfig.set(c),
+        get status() {
+          const e = window.karkhanaEgress;
+          return e ? { configured: true, hosts: e.hosts, ...e.stats } : { configured: false };
+        },
+      };
+
       // ---- settings panel (writes karkhana.ai.agent.config -> localStorage + IDB) ----
       {
         const panel = document.getElementById('cfgpanel');
@@ -294,11 +325,16 @@
         const load = () => {
           const c = window.karkhana.ai.agent.config || {};
           $('cfg-endpoint').value = c.endpoint || ''; $('cfg-model').value = c.model || ''; $('cfg-key').value = c.key || '';
+          const e = egressConfig.get() || {};
+          $('cfg-egress-url').value = e.workerUrl || ''; $('cfg-egress-secret').value = e.secret || '';
+          $('cfg-egress-hosts').value = (e.hosts || []).join(', ');
         };
         $('cfgbtn').addEventListener('click', () => { panel.hidden = !panel.hidden; if (!panel.hidden) load(); });
         $('cfg-nano').addEventListener('click', () => { $('cfg-endpoint').value = 'builtin:nano'; $('cfg-model').value = 'gemini-nano'; $('cfg-key').value = ''; });
         $('cfg-save').addEventListener('click', () => {
           window.karkhana.ai.agent.config = { endpoint: $('cfg-endpoint').value.trim(), model: $('cfg-model').value.trim(), key: $('cfg-key').value.trim() };
+          egressConfig.set({ workerUrl: $('cfg-egress-url').value.trim(), secret: $('cfg-egress-secret').value.trim(),
+            hosts: $('cfg-egress-hosts').value.split(',').map((h) => h.trim()).filter(Boolean) });
           $('cfg-note').textContent = 'saved'; setTimeout(() => { $('cfg-note').textContent = ''; }, 2000);
         });
       }

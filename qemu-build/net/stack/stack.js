@@ -71,6 +71,17 @@ const CORS_SIMPLE_CONTENT_TYPES = new Set([
 // headers intact. Left exactly as it was.
 const BRIDGE_HOST = "api.karkhana.internal";
 
+// Hosts that send no CORS headers go through the user's egress Worker when the
+// page has configured one (window.karkhanaEgress, see net/egress.js). The relay
+// gets the guest's own headers; direct fetches stay CORS-simple.
+function stackFetch(connObj) {
+    const egress = globalThis.karkhanaEgress;
+    if (egress && egress.routes(connObj.address)) {
+        return egress.fetch(connObj.address, connObj.request, connObj.fullHeaders);
+    }
+    return fetch(connObj.address, connObj.request);
+}
+
 function keepRequestCorsSimple(headers, address) {
     if (!headers) return headers;
     if (address && address.indexOf(BRIDGE_HOST) !== -1) return headers;
@@ -461,6 +472,7 @@ function connect(name, shared, toNet, certbuf) {
                         delete reqObj.headers["User-Agent"]; // Browser will add its own value.
                     }
                     var reqAddress = new TextDecoder().decode(req_.address);
+                    var fullHeaders = reqObj.headers || {};
                     reqObj.headers = keepRequestCorsSimple(reqObj.headers, reqAddress);
                     var reqID = getID();
                     if (reqID < 0) {
@@ -471,6 +483,7 @@ function connect(name, shared, toNet, certbuf) {
                     var connObj = {
                         address: new TextDecoder().decode(req_.address),
                         request: reqObj,
+                        fullHeaders: fullHeaders,
                         requestSent: false,
                         reqBodybuf: new Uint8Array(0),
                         reqBodyEOF: false,
@@ -498,7 +511,7 @@ function connect(name, shared, toNet, certbuf) {
                         if ((connObj.request.method != "HEAD") && (connObj.request.method != "GET")) {
                             connObj.request.body = connObj.reqBodybuf;
                         }
-                        fetch(connObj.address, connObj.request).then((resp) => {
+                        stackFetch(connObj).then((resp) => {
                             connObj.done = false;
                             connObj.respBodybuf = new Uint8Array(0);
                             if (resp.ok) {
