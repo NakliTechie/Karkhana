@@ -6,7 +6,7 @@
 //     reload, and the guest's files come back with the same disk identity.
 // Headless Chrome cannot show the folder picker, so the folder is an OPFS
 // directory: the same FileSystemDirectoryHandle API a picked folder has.
-// Run: node qemu-build/test-backup-browser.mjs   (KARKHANA_ROOT as elsewhere)
+// Run: node qemu-build/test-backup-browser.mjs   (KARKHANA_ROOT and KARKHANA_URL as elsewhere)
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -16,13 +16,15 @@ import { launch, serve, shell, sleep, until } from './browser-harness.mjs';
 
 const ROOT = path.resolve(process.env.KARKHANA_ROOT || fileURLToPath(new URL('..', import.meta.url)));
 const PAGE = existsSync(path.join(ROOT, 'index.html')) ? 'index.html' : 'karkhana.html';
-const BOOT_MS = 240_000;
+const LIVE_URL = process.env.KARKHANA_URL;
+// A live first visit downloads the whole engine before it boots.
+const BOOT_MS = LIVE_URL ? 900_000 : 240_000;
 const FOLDER = `navigator.storage.getDirectory().then((r) => r.getDirectoryHandle('backup-under-test', { create: true }))`;
 
 test('the disk backs up to a folder and restores from it', { timeout: 3 * BOOT_MS + 600_000 }, async (t) => {
-  const server = await serve(ROOT);
+  const server = LIVE_URL ? null : await serve(ROOT);
   const browser = await launch();
-  t.after(async () => { await browser.close(); server.close(); });
+  t.after(async () => { await browser.close(); server?.close(); });
   const page = await browser.newPage();
   const sh = shell(page);
   const boot = async () => {
@@ -37,7 +39,7 @@ test('the disk backs up to a folder and restores from it', { timeout: 3 * BOOT_M
     assert.notEqual(s.state, 'error', s.lastError);
     return s.seq >= seq ? s : null;
   }, 300_000);
-  await page.send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/${PAGE}` });
+  await page.send('Page.navigate', { url: LIVE_URL || `http://127.0.0.1:${server.address().port}/${PAGE}` });
   await boot();
   assert.equal(await page.evaluate('window.karkhana.disk.mode'), 'persistent');
 
