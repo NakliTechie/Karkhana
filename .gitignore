@@ -26,6 +26,7 @@
 !kfetch.py
 !kpip_fast.py
 !knpm.py
+!social.png
 !npm-tree.js
 !semver.mjs
 !karkhana-tty.sh
@@ -112,6 +113,7 @@ qemu-build/guest/*
 !qemu-build/guest/kfetch.py
 !qemu-build/guest/kpip_fast.py
 !qemu-build/guest/knpm.py
+!qemu-build/social-card.html
 !qemu-build/test-knpm.py
 !qemu-build/test-npm-tree.mjs
 !qemu-build/guest/karkhana-tty.sh
