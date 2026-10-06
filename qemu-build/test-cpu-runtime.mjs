@@ -82,7 +82,8 @@ test('the guest CPU runs Bun and Node correctly', { timeout: BOOT_MS + (OPENCODE
   for (const name of names) await stage(name, readFileSync(path.join(ASSETS, name)));
   await stage('cpu-runtime.js', Buffer.from(RUNTIME_JS));
   await stage('cpu-check.sh', Buffer.from(SCRIPT));
-  await sh.run('sh /persist/cpu-check.sh &', 60_000);
+  // A subshell: run() appends `; echo <marker>`, and `&;` is a syntax error.
+  await sh.run('(sh /persist/cpu-check.sh &)', 60_000);
   const log = await until('the guest checks', async () => {
     const text = await page.evaluate("(() => { try { return Module.FS.readFile('/persist/cpu-check.log', { encoding: 'utf8' }); } catch (e) { return ''; } })()");
     return /CHECK_(COMPLETE|FAILED)/.test(text) ? text : null;
