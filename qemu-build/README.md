@@ -508,9 +508,13 @@ OpenAI, Anthropic, Nano. Endpoints carry no `/v1`; the bridge appends the
 guest's own path.
 
 The guest holds a placeholder key only. `/pack/info` sets `OPENAI_BASE_URL`,
-`OPENAI_API_BASE`, `ANTHROPIC_BASE_URL` and `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`
-(`karkhana-bridge`), so aider, OpenCode, Claude Code and the SDKs find the bridge
-without flags. The worker swaps the real key into the header the client used:
+`OPENAI_API_BASE`, `ANTHROPIC_BASE_URL`, `DEEPSEEK_BASE_URL` and the matching
+`*_API_KEY` (`karkhana-bridge`), so aider, OpenCode, dsh and the SDKs find the
+bridge without flags. dsh speaks DeepSeek's Messages API; point the panel at
+`https://api.deepseek.com/anthropic`. dsh confines its commands with bubblewrap
+or Landlock, which the guest kernel lacks; the VM is the boundary here, so set
+`defaultPreset: danger-full-access` on its `permission` entry in
+`~/.dsh/cordis.patch.yml`. The worker swaps the real key into the header the client used:
 `x-api-key` for Anthropic-protocol calls, `Authorization` otherwise. For
 `api.anthropic.com` it adds `anthropic-dangerous-direct-browser-access`. A
 `"model": "default"` is replaced by the panel's model, so
