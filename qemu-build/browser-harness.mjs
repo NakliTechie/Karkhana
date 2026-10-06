@@ -79,6 +79,8 @@ export async function launch({ width = 1440, height = 810 } = {}) {
   return {
     // Browser-level DevTools commands (Browser.setDownloadBehavior, ...).
     send: (method, params) => send(method, params),
+    // DevTools commands to an attached target's flat session (workers, frames).
+    sendSession: (sessionId, method, params) => send(method, params, sessionId),
     async newPage() {
       const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
       const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
