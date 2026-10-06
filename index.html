@@ -293,26 +293,6 @@
         },
         vm: { get state() { return stateEl.textContent; } },
         pty: slave,
-        // v1 persistence: guest runs `tar -cf /persist/state.tar <dirs>`, then
-        // pull() mirrors the bytes to OPFS; next boot's preRun restores them and
-        // the guest runs `tar -xf /persist/state.tar -C /` to reinstate.
-        persist: {
-          pull: async () => {
-            const data = Module.FS.readFile('/persist/state.tar');
-            const root = await navigator.storage.getDirectory();
-            const dir = await root.getDirectoryHandle('karkhana-persist', { create: true });
-            const fh = await dir.getFileHandle('state.tar', { create: true });
-            const w = await fh.createWritable();
-            await w.write(data); await w.close();
-            return data.length;
-          },
-          forget: async () => {
-            const root = await navigator.storage.getDirectory();
-            const dir = await root.getDirectoryHandle('karkhana-persist', { create: true });
-            await dir.removeEntry('state.tar');
-          },
-          get restored() { return !!window.karkhana._persistRestored; },
-        },
         // ---- AI ladder (naklios two-tier bifurcation) ----
         // GP tier: Chrome built-in Gemini Nano — on-device, free, private. Fine for
         // general queries, useless for coding (by design, never offered to the agent).
@@ -447,7 +427,7 @@
       const DISK_WORKER = new URL('./opfs-disk-worker.js', location.href);
       const FORKS = 'karkhana-forks';
       // A machine file only resumes on the engine that saved it (publish.sh stamps this).
-      const ENGINE_ID = 'karkhana-engine-1603f2949cae';
+      const ENGINE_ID = 'karkhana-engine-04950ef2dd25';
       // A machine file opened here waits in OPFS (FORKS/<id>.karkhana) for the
       // reload that boots it, which reads it into memory and deletes it.
       async function takeMachine(id) {
@@ -502,25 +482,8 @@
         try {
           const net = await netReady;
           let info = 't:' + Math.round(Date.now() / 1000) + '\n';
-          // persistent dir: c2w init bind-mounts host-FS /persist into the container
-          // (the same 'm:' mechanism that delivers the TLS cert dir).
-          // v1 persistence = tar-into-preallocated-file: guest-side CREATE over 9p is
-          // broken upstream (ENOENT surfaces as ECHRNG) but writes into EXISTING files
-          // work — so JS pre-creates state.tar (restored from OPFS when present) and
-          // the guest tars into it. karkhana.persist.pull() mirrors it back to OPFS.
-          const opfsState = await (async () => {
-            try {
-              const root = await navigator.storage.getDirectory();
-              const dir = await root.getDirectoryHandle('karkhana-persist', { create: true });
-              try {
-                const fh = await dir.getFileHandle('state.tar');
-                const f = await fh.getFile();
-                if (f.size > 0) return { bytes: new Uint8Array(await f.arrayBuffer()), handle: fh };
-              } catch (e) {}
-            } catch (e) { console.warn('opfs unavailable', e); }
-            return null;
-          })();
-
+          // /persist: c2w init bind-mounts this page-memory directory into the
+          // container (the same 'm:' mechanism that delivers the TLS cert dir).
           const guestDisk = await diskReady;
           // The OPFS disk once this tab is persistent. A scratch tab runs on the
           // in-memory disk until "keep this machine" moves it onto a new one.
@@ -915,17 +878,24 @@
           info += 'disk: vdb\ndisk-mode: ' + (disk ? 'persistent' : 'scratch') + '\n';
           window.addEventListener('pagehide', () => { try { disk?.flush(); } catch (e) {} });
 
-          // The persistent disk keeps /usr/local and /root by itself. A ksave
-          // archive is restored once, into a newly created disk, then set aside:
-          // restoring it on every boot would roll the disk back.
-          const stagedState = disk && !disk.created ? null : opfsState;
-          if (disk && stagedState) stagedState.handle.move('state.tar.migrated').catch((e) => console.warn('karkhana: state.tar kept', e));
+          // Before the persistent disk (2026-10-02), `ksave` kept /usr/local and
+          // /root in an OPFS archive. A disk created in such a browser takes that
+          // archive once: the page stages it, the guest's .bashrc untars it at
+          // the first prompt, and the page sets it aside. Later boots stage
+          // nothing: restoring it again would roll the disk back.
+          const oldState = disk?.created ? await (async () => {
+            try {
+              const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('karkhana-persist');
+              const handle = await dir.getFileHandle('state.tar');
+              const file = await handle.getFile();
+              return file.size ? { bytes: new Uint8Array(await file.arrayBuffer()), handle } : null;
+            } catch (e) { return null; }
+          })() : null;
+          if (oldState) oldState.handle.move('state.tar.migrated').catch((e) => console.warn('karkhana: state.tar kept', e));
           Module['preRun'].push((mod) => {
             try { mod.FS.mkdir('/persist'); } catch (e) {}
-            mod.FS.writeFile('/persist/state.tar', stagedState ? stagedState.bytes : new Uint8Array(0));
-            mod.FS.writeFile('/persist/.ksave-done', '0'); // pre-created: guest bumps it after ksave
+            if (oldState) mod.FS.writeFile('/persist/state.tar', oldState.bytes);
           });
-          window.karkhana._persistRestored = !!stagedState;
           info += 'm: persist\n';
 
           const ttyScript = await ttyScriptReady;
@@ -957,20 +927,6 @@
             info += 'env: PATH=/persist/.karkhana-net/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n';
           } catch (error) { console.warn('direct package downloads unavailable', error); }
 
-          // auto-pull: when the guest's ksave bumps the nonce, mirror state.tar to OPFS
-          let lastKsaveNonce = '0';
-          setInterval(async () => {
-            try {
-              const v = new TextDecoder().decode(Module.FS.readFile('/persist/.ksave-done')).trim();
-              if (v !== lastKsaveNonce) {
-                lastKsaveNonce = v;
-                if (v !== '0') {
-                  const n = await window.karkhana.persist.pull();
-                  console.log('karkhana: ksave detected — pulled ' + n + ' bytes to OPFS');
-                }
-              }
-            } catch (e) {}
-          }, 4000);
           if (net && net.mode === 'relay') {
             // real TCP via local relay — no proxy env, no cert; DHCP against the relay's stack
             window.karkhana.net = { mode: 'relay', cert: false };
@@ -1016,7 +972,7 @@
             } catch (e) { /* direct mode */ }
             if (mf) {
               const engineUrls = {};
-              const cache = await caches.open('karkhana-engine-1603f2949cae').catch(() => null);
+              const cache = await caches.open('karkhana-engine-04950ef2dd25').catch(() => null);
               let done = 0;
               const total = Object.values(mf).reduce((a, f) => a + f.size, 0);
               // A reassembled engine is cached only after it matches the manifest.
