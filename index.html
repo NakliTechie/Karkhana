@@ -274,12 +274,17 @@
         nano:       { label: 'On-device Gemini Nano (GP only)', endpoint: 'builtin:nano', model: 'gemini-nano', key: 'no key' },
       };
 
+      // While the page holds QEMU's monitor (withMonitor), text for the guest
+      // waits here: sent now, it would reach the monitor as commands.
+      let monitorQueue = null;
+      const toGuest = (text) => { if (monitorQueue) monitorQueue.push(text); else slave.ldisc.writeFromLower(text); };
+
       // ---- agent face: window.karkhana (same seam the v86 build exposed) ----
       window.karkhana = {
         engine: 'qemu-wasm',
         shell: {
-          send: (text) => slave.ldisc.writeFromLower(text),
-          exec: (cmd)  => slave.ldisc.writeFromLower(cmd + '\r'),
+          send: (text) => toGuest(text),
+          exec: (cmd)  => toGuest(cmd + '\r'),
           get size() { return { cols: xterm.cols, rows: xterm.rows }; },
           onData: (cb) => { dataListeners.push(cb); return () => { const i = dataListeners.indexOf(cb); if (i !== -1) dataListeners.splice(i, 1); }; },
         },
@@ -678,7 +683,15 @@
           // QEMU's monitor shares the console (-nographic): Ctrl-A c switches
           // between them. While the page talks to the monitor the terminal shows
           // nothing, so its replies stay out of the user's scrollback.
-          async function withMonitor(fn) {
+          // One monitor session at a time: a save must not overlap the
+          // post-restore cleanup.
+          let monitorTurn = Promise.resolve();
+          function withMonitor(fn) {
+            const session = monitorTurn.then(() => monitorSession(fn));
+            monitorTurn = session.catch(() => {});
+            return session;
+          }
+          async function monitorSession(fn) {
             let text = '';
             const listen = (t) => { text += t; };
             const settle = async (pattern, ms) => {
@@ -690,10 +703,12 @@
               return text;
             };
             const ask = (command, ms = 30_000) => { text = ''; slave.ldisc.writeFromLower(command + '\r'); return settle(/\(qemu\) $/, ms); };
-            // Keys typed now would reach the monitor, not the guest.
+            // Keys typed now would reach the monitor, not the guest; text from
+            // karkhana.shell waits in monitorQueue until the console is back.
             const write = xterm.write;
             xterm.write = (data, done) => { done?.(); };
             xterm.options.disableStdin = true;
+            monitorQueue = [];
             dataListeners.push(listen);
             try {
               slave.ldisc.writeFromLower('\x01c');
@@ -705,6 +720,9 @@
               dataListeners.splice(dataListeners.indexOf(listen), 1);
               xterm.write = write;
               xterm.options.disableStdin = false;
+              const queued = monitorQueue;
+              monitorQueue = null;
+              for (const text of queued) slave.ldisc.writeFromLower(text);
             }
           }
 

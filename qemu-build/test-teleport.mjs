@@ -1,7 +1,7 @@
 // Browser check of machine files (Batch V2, teleport): two headless Chromes
 // with separate profiles stand in for two devices. It proves that
 //   - "save this machine to a file" downloads the running machine, disk and RAM,
-//     while the guest keeps running,
+//     while the guest keeps running, and a command sent mid-save reaches the guest,
 //   - opening that file in the other browser resumes it mid-command: the same
 //     shell (a variable set only in RAM), the same background process, still
 //     counting, and the disk's files,
@@ -61,6 +61,10 @@ test('a running machine moves to another browser through a file', { timeout: 6 *
     pid = (await a.run('(sh /root/tp-count.sh >/dev/null 2>&1 & echo $!)', COMMAND_MS)).find((line) => /^\d+$/.test(line));
     await one.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads });
     await a.page.evaluate('document.getElementById("cfg-machine-save").click(); true');
+    // The save holds QEMU's monitor for seconds; a command sent meanwhile must
+    // wait for the guest, not reach the monitor.
+    await sleep(300);
+    assert.deepEqual(await a.run('echo sent-during-save', COMMAND_MS), ['sent-during-save']);
     const name = await until('the download', async () => {
       const done = (await readdir(downloads)).filter((n) => n.endsWith('.karkhana'));
       return done[0] || null;
