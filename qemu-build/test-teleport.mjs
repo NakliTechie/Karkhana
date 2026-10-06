@@ -65,8 +65,11 @@ test('a running machine moves to another browser through a file', { timeout: 6 *
     // wait for the guest, not reach the monitor.
     await sleep(300);
     assert.deepEqual(await a.run('echo sent-during-save', COMMAND_MS), ['sent-during-save']);
+    // A failed save shows its error in the Disk status line; stop on it.
     const name = await until('the download', async () => {
       const done = (await readdir(downloads)).filter((n) => n.endsWith('.karkhana'));
+      const status = await a.page.evaluate('document.getElementById("cfg-disk-status").textContent');
+      if (!done.length && !/saving this machine|saved this machine/.test(status)) throw new Error(`save failed: ${status}`);
       return done[0] || null;
     }, 600_000);
     file = path.join(downloads, name);
