@@ -138,7 +138,7 @@ It checks `apt-get install` and a GitHub release download.
 The browser performs HTTPS requests for index metadata and wheel bytes.
 No external guest TCP or guest TLS participates in those downloads.
 
-The page stages `kfetch.py` and `kpip_fast.py` into `/persist/.karkhana-net`
+The page stages `kfetch.py`, `kpip_fast.py` and `knpm.py` into `/persist/.karkhana-net`
 before boot. `/pack/info` adds their wrappers to the guest's PATH. Existing
 engine snapshots therefore need no rebuild. `build.sh`, `chunk.sh`, and
 `publish.sh` carry the bridge, metadata processor, and Python assets on subsequent rebuilds.
@@ -302,6 +302,20 @@ checks the mounted 16 GiB disk, survival of a reload and of an unsynced tab
 close, tmpfs `/tmp`, the second-tab scratch fallback, and first-visit OPFS cost.
 Set `KARKHANA_ROOT=qemu-build/publish` to test a staged build before publishing,
 or `KARKHANA_URL=https://karkhana.naklitechie.com/` to test the deployed site.
+
+### npm installs resolved in the browser
+
+`knpm` takes any npm command line, e.g. `knpm install -g opencode-ai`. npm
+looks up registry documents one at a time, and each lookup from the guest
+costs about a second. knpm first sends the named packages over the same
+mailbox. The page walks their dependency tree with up to 24 browser fetches
+at once (`net/npm-tree.js`). It picks versions as npm does: dist-tag `latest`
+when it satisfies the range, else the highest match. It returns one bundle,
+trimmed to the versions any range in the tree accepts. knpm then runs npm
+against a loopback registry that answers from the bundle. Documents outside
+it, and every tarball, go through kfetch, so a wrong guess costs time only.
+Audit and fund requests are off. `semver` 7.8.5 is vendored as `net/semver.mjs`.
+Checks: `node --test qemu-build/test-npm-tree.mjs` and `python3 qemu-build/test-knpm.py`.
 
 ### Terminal size
 
