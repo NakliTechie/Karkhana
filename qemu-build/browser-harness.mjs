@@ -108,7 +108,8 @@ export async function launch({ width = 1440, height = 810 } = {}) {
       socket.close();
       chrome.kill();
       await new Promise((resolve) => chrome.once('exit', resolve));
-      await rm(profile, { recursive: true, force: true });
+      // Chrome's helpers can still be writing the profile as the browser exits.
+      await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     },
   };
 }
