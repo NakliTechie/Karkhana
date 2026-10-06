@@ -32,8 +32,8 @@ ls -la "$OUT"
 
 echo "==> Installing Karkhana console page + vendored terminal assets…"
 cp "$(pwd)/karkhana.html" "$OUT/karkhana.html"
-cp "$(pwd)/net/browser-fetch.js" "$(pwd)/net/pypi-metadata.js" "$(pwd)/net/egress.js" "$OUT/"
-cp "$(pwd)/guest/kfetch.py" "$(pwd)/guest/kpip_fast.py" "$(pwd)/guest/karkhana-tty.sh" "$OUT/"
+cp "$(pwd)/net/browser-fetch.js" "$(pwd)/net/pypi-metadata.js" "$(pwd)/net/npm-tree.js" "$(pwd)/net/semver.mjs" "$(pwd)/net/egress.js" "$OUT/"
+cp "$(pwd)/guest/kfetch.py" "$(pwd)/guest/kpip_fast.py" "$(pwd)/guest/knpm.py" "$(pwd)/guest/karkhana-tty.sh" "$OUT/"
 cp "$(pwd)/disk/opfs-disk.js" "$(pwd)/disk/opfs-disk-worker.js" "$(pwd)/disk/mem-disk.js" "$(pwd)/disk/machine-file.js" "$(pwd)/disk/chunk-tracker.js" "$(pwd)/disk/replica.js" \
    "$(pwd)/disk/replica-worker.js" "$(pwd)/disk/backup.js" "$OUT/"
 # rm first: cp -R into an existing dir nests it (vendor/vendor) on every rebuild.

@@ -25,6 +25,9 @@
 !egress.js
 !kfetch.py
 !kpip_fast.py
+!knpm.py
+!npm-tree.js
+!semver.mjs
 !karkhana-tty.sh
 !opfs-disk.js
 !opfs-disk-worker.js
@@ -108,6 +111,9 @@ qemu-build/guest/*
 !qemu-build/guest/agent.py
 !qemu-build/guest/kfetch.py
 !qemu-build/guest/kpip_fast.py
+!qemu-build/guest/knpm.py
+!qemu-build/test-knpm.py
+!qemu-build/test-npm-tree.mjs
 !qemu-build/guest/karkhana-tty.sh
 !qemu-build/vendor/
 qemu-build/vendor/*
@@ -124,6 +130,8 @@ qemu-build/net/c2w-net-proxy/*
 !qemu-build/net/c2w-net-proxy/README.md
 !qemu-build/net/stack/
 !qemu-build/net/browser-fetch.js
+!qemu-build/net/npm-tree.js
+!qemu-build/net/semver.mjs
 !qemu-build/net/pypi-metadata.js
 !qemu-build/net/egress.js
 qemu-build/net/stack/*

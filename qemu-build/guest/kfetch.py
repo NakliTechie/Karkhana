@@ -43,7 +43,7 @@ def _decode_json(data):
 
 class Response:
     """One slot stays locked until EOF or close; consumers provide backpressure."""
-    def __init__(self, url, headers=None, method='GET', timeout=120, pypi=None):
+    def __init__(self, url, headers=None, method='GET', timeout=120, pypi=None, npm=None):
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 600 or not math.isfinite(timeout):
             raise BridgeError('timeout must be between 1 and 600 seconds')
         self.deadline = time.monotonic() + timeout
@@ -70,6 +70,8 @@ class Response:
                 raise BridgeError('invalid bridge slot configuration')
             if pypi is not None and config.get('pypiMetadata') != 1:
                 raise BridgeError('browser PyPI metadata processing is unavailable; reload Karkhana')
+            if npm is not None and config.get('npmTree') != 1:
+                raise BridgeError('browser npm tree resolution is unavailable; reload Karkhana')
             self.generation = config.get('generation')
             self.chunk_bytes = config.get('chunkBytes')
             if (not isinstance(self.generation, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', self.generation)
@@ -83,6 +85,8 @@ class Response:
                 'timeoutMs': int(timeout * 1000)}
             if pypi is not None:
                 payload['pypi'] = pypi
+            if npm is not None:
+                payload['npm'] = npm
             request = json.dumps(payload)
             if len(request.encode()) > 16384:
                 raise BridgeError('request exceeds size limit')
@@ -262,12 +266,12 @@ class Response:
         self.close()
 
 
-def fetch(url, headers=None, method='GET', timeout=120, pypi=None):
-    return Response(url, headers=headers, method=method, timeout=timeout, pypi=pypi)
+def fetch(url, headers=None, method='GET', timeout=120, pypi=None, npm=None):
+    return Response(url, headers=headers, method=method, timeout=timeout, pypi=pypi, npm=npm)
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Download HTTPS PyPI files through browser fetch; no guest external TCP/TLS. CORS applies.')
+    parser = argparse.ArgumentParser(description='Download HTTPS PyPI and npm registry files through browser fetch; no guest external TCP/TLS. CORS applies.')
     parser.add_argument('url')
     parser.add_argument('-o', '--output', help='write atomically to this file after a complete response')
     parser.add_argument('-I', '--head', action='store_true', help='fetch and print response headers only')

@@ -2,10 +2,11 @@
 // The guest owns request/ack/cancel files; the browser owns ready/chunk files.
 // Publish bytes first, then a generation + request + sequence commit marker.
 import { createPyPIProcessor } from './pypi-metadata.js';
+import { createNpmTree } from './npm-tree.js';
 export const FETCH_LIMITS = Object.freeze({ slots: 4, chunkBytes: 256 * 1024,
   requestBytes: 16384, responseHeaderBytes: 16384, readBytes: 16 * 1024 * 1024,
   maxTimeoutMs: 600000, pollMs: 20 });
-const ORIGINS = new Set(['https://pypi.org', 'https://files.pythonhosted.org']);
+const ORIGINS = new Set(['https://pypi.org', 'https://files.pythonhosted.org', 'https://registry.npmjs.org']);
 const HEADER_NAMES = new Set(['accept', 'range', 'if-range', 'if-none-match', 'if-modified-since']);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -35,6 +36,7 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
   const generationPrefix = generation.slice(0, 24);
   let running = false, timer, sweepTimer, directory, rootIdentity;
   let pypi = createPyPIProcessor(pypiOptions), slots = [];
+  const npmTree = createNpmTree();
   let registry = owners.get(FS);
   if (!registry) owners.set(FS, registry = new Map());
   const owner = {};
@@ -87,7 +89,7 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
     const url = new URL(request.url);
     const authority = request.url.match(/^[a-z][a-z0-9+.-]*:\/\/([^/]*)/i)?.[1];
     if (url.username || url.password || authority?.includes('@') || !ORIGINS.has(url.origin))
-      throw failure('blocked', 'only HTTPS pypi.org and files.pythonhosted.org downloads are supported');
+      throw failure('blocked', 'only HTTPS pypi.org, files.pythonhosted.org and registry.npmjs.org downloads are supported');
     if (!['GET', 'HEAD'].includes(request.method)) throw failure('blocked', 'only GET and HEAD are supported');
     if (!Array.isArray(request.headers) || request.headers.length > 16) throw new Error('invalid headers');
     const headers = new Headers();
@@ -160,9 +162,13 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
           url: response.url, redirected: response.redirected, body };
       };
       let response;
-      if (request.pypi !== undefined) {
+      if (request.pypi !== undefined && request.npm !== undefined) {
+        throw failure('blocked', 'a request is either PyPI metadata or an npm tree');
+      } else if (request.pypi !== undefined) {
         const opened = await pypi.open(request, task.controller, fetchRemote);
         response = opened.response; release = opened.release;
+      } else if (request.npm !== undefined) {
+        response = await npmTree.open(request, task.controller, fetchRemote);
       } else {
         response = await fetchRemote(url.href, { method: request.method, headers, signal: task.controller.signal });
       }
@@ -275,7 +281,7 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
         }));
         pypi = createPyPIProcessor(pypiOptions);
         for (const [name, source] of Object.entries(scripts)) write(`${root}/${name}`, source);
-        for (const [command, script] of [['kfetch', 'kfetch.py'], ['kpip-fast', 'kpip_fast.py']]) {
+        for (const [command, script] of [['kfetch', 'kfetch.py'], ['kpip-fast', 'kpip_fast.py'], ['knpm', 'knpm.py']]) {
           write(`${root}/bin/${command}`, `#!/bin/sh\nexec python3 '${root.replaceAll("'", "'\\''")}/${script}' "$@"\n`);
           FS.chmod(`${root}/bin/${command}`, 0o755);
         }
@@ -286,7 +292,7 @@ export function createBrowserFetchBridge(FS, { root = '/persist/.karkhana-net',
         // Publish configuration last, after every mailbox is ready.
         write(`${root}/config.json`, JSON.stringify({ protocol: 2, available: true, generation,
           slots: limits.slots, chunkBytes: limits.chunkBytes, maxTimeoutMs: limits.maxTimeoutMs,
-          pypiMetadata: 1 }));
+          pypiMetadata: 1, npmTree: 1 }));
         running = true; poll();
         sweepTimer = setInterval(() => pypi.sweep(), 30000);
       } catch (error) { running = false; retire(); throw error; }

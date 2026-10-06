@@ -17,7 +17,7 @@ DEST="$REPO_ROOT"
 # The paths an engine publish owns at the apex. Named explicitly because DEST is
 # the repo root: a blanket rm -rf here would take the whole working tree with it.
 OWNED=(engine dist vendor index.html karkhana-sw.js load.js out.js
-       arg-module.js browser-fetch.js pypi-metadata.js egress.js kfetch.py kpip_fast.py karkhana-tty.sh
+       arg-module.js browser-fetch.js pypi-metadata.js npm-tree.js semver.mjs egress.js kfetch.py kpip_fast.py knpm.py karkhana-tty.sh
        opfs-disk.js opfs-disk-worker.js mem-disk.js machine-file.js chunk-tracker.js replica.js replica-worker.js backup.js kdisk.qcow2.gz c2w-net-proxy.wasm.gzip)
 DRY=false
 STAGE="publish"

@@ -12,7 +12,12 @@ import { syntheticProject } from './fixtures/pypi-project.mjs';
 const sourcePath = process.env.BROWSER_FETCH_SOURCE || new URL('./net/browser-fetch.js', import.meta.url);
 const clientPath = process.env.KFETCH_TEST_CLIENT || new URL('./guest/kfetch.py', import.meta.url).pathname;
 const metadataURL = 'data:text/javascript;base64,' + readFileSync(new URL('./net/pypi-metadata.js', import.meta.url)).toString('base64');
-const source = Buffer.from(readFileSync(sourcePath, 'utf8').replace("'./pypi-metadata.js'", JSON.stringify(metadataURL)));
+// npm-tree.js imports semver.mjs; a data: module has no base URL, so inline both.
+const semverURL = 'data:text/javascript;base64,' + readFileSync(new URL('./net/semver.mjs', import.meta.url)).toString('base64');
+const npmTreeURL = 'data:text/javascript;base64,' + Buffer.from(readFileSync(new URL('./net/npm-tree.js', import.meta.url), 'utf8')
+  .replace("'./semver.mjs'", JSON.stringify(semverURL))).toString('base64');
+const source = Buffer.from(readFileSync(sourcePath, 'utf8').replace("'./pypi-metadata.js'", JSON.stringify(metadataURL))
+  .replace("'./npm-tree.js'", JSON.stringify(npmTreeURL)));
 const { createBrowserFetchBridge, FETCH_LIMITS } = await import(`data:text/javascript;base64,${source.toString('base64')}`);
 const generation = '6a8d81c1-b0bd-4d42-b0bc-f52168f114a6';
 const id = 'a'.repeat(32);
@@ -569,4 +574,55 @@ test('cancelling unacknowledged headers cancels the unopened response body once'
   f.write('cancel', f.token);
   await until(() => f.bridge.status.active === 0);
   assert.equal(cancelled, 1);
+});
+
+test('knpm gets an npm tree bundle through the mailbox and serves documents and tarballs from loopback', async t => {
+  const tarball = Buffer.from([31, 139, 8, 0, 255, 0, 1, 2, 3]);
+  const corgi = (name, deps = {}) => ({ name, 'dist-tags': { latest: '1.0.0' }, versions: { '1.0.0': { name, version: '1.0.0',
+    dependencies: deps, dist: { tarball: `https://registry.npmjs.org/${name}/-/${name.split('/').pop()}-1.0.0.tgz` } } } });
+  const docs = { demo: corgi('demo', { '@s/dep': '^1' }), '@s/dep': corgi('@s/dep') };
+  const calls = [];
+  const f = fixture(t, async (url, options) => {
+    calls.push(url);
+    const name = decodeURIComponent(url.slice('https://registry.npmjs.org/'.length));
+    if (docs[name]) {
+      assert.match(new Headers(options.headers).get('accept'), /^application\/vnd\.npm\.install-v1\+json/);
+      return Response.json(docs[name]);
+    }
+    assert.equal(url, 'https://registry.npmjs.org/@s/dep/-/dep-1.0.0.tgz');
+    return new Response(tarball);
+  });
+  const script = `
+import sys, threading, http.client, json, base64
+sys.path.insert(0, ${JSON.stringify(new URL('./guest/', import.meta.url).pathname)})
+from knpm import Registry, Server, REGISTRY
+from kfetch import fetch
+with fetch(REGISTRY + '/', [], 'GET', 30, npm={'specs': ['demo']}) as response:
+    bundle = json.loads(b''.join(response.iter_chunks()))
+server = Server(Registry(fetch, bundle))
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
+try:
+    def get(path):
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=10)
+        connection.request('GET', path)
+        response = connection.getresponse()
+        return response.status, response.read()
+    status, dep = get('/@s%2fdep')
+    assert status == 200, dep
+    url = json.loads(dep)['versions']['1.0.0']['dist']['tarball']
+    status, data = get(url.split(str(server.server_address[1]), 1)[1])
+    assert status == 200, data
+    print(json.dumps({'packages': bundle['packages'], 'tarball': url, 'body': base64.b64encode(data).decode(), 'stats': server.registry.stats}))
+finally:
+    server.shutdown()
+`;
+  const result = await f.pythonRaw(['-c', script]);
+  assert.equal(result.code, 0, result.stderr);
+  const received = JSON.parse(result.stdout);
+  assert.equal(received.packages, 2);
+  assert.match(received.tarball, /^http:\/\/127\.0\.0\.1:\d+\/-\/t\/@s\/dep\/-\/dep-1\.0\.0\.tgz$/);
+  assert.deepEqual(Buffer.from(received.body, 'base64'), tarball);
+  assert.deepEqual(received.stats, { bundled: 1, fetched: 0, tarballs: 1, missing: 0 });
+  assert.deepEqual(calls.sort(), ['https://registry.npmjs.org/@s%2fdep', 'https://registry.npmjs.org/@s/dep/-/dep-1.0.0.tgz', 'https://registry.npmjs.org/demo'].sort());
 });
