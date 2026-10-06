@@ -75,6 +75,9 @@
         <button id="cfg-keep">keep this machine</button>
         <button id="cfg-fork">fork this machine</button>
         <button id="cfg-scratch-tab">open a scratch tab</button>
+        <button id="cfg-machine-save">save this machine to a file</button>
+        <button id="cfg-machine-open">open a machine file…</button>
+        <input type="file" id="cfg-machine-file" accept=".karkhana" hidden>
       </div>
       <div class="row"><label>Egress</label><input id="cfg-egress-url" placeholder="your nakli-egress Worker, e.g. https://nakli-egress.you.workers.dev — optional" /></div>
       <div class="row"><label>Secret</label><input id="cfg-egress-secret" type="password" placeholder="the Worker's EGRESS_SECRET" /></div>
@@ -118,6 +121,7 @@
       import { createBrowserFetchBridge } from './browser-fetch.js';
       import { fetchDiskTemplate, mountDisk, openOpfsDisk } from './opfs-disk.js';
       import { MemDisk, promote } from './mem-disk.js';
+      import { readMachine, writeMachine } from './machine-file.js';
       import { createBackup, pendingRestore } from './backup.js';
       import { DEFAULT_EGRESS_HOSTS, createEgress } from './egress.js';
 
@@ -434,6 +438,18 @@
       const DISK_TEMPLATE = new URL('./kdisk.qcow2.gz', location.href);
       const DISK_WORKER = new URL('./opfs-disk-worker.js', location.href);
       const FORKS = 'karkhana-forks';
+      // A machine file only resumes on the engine that saved it (publish.sh stamps this).
+      const ENGINE_ID = 'karkhana-engine-1603f2949cae';
+      // A machine file opened here waits in OPFS (FORKS/<id>.karkhana) for the
+      // reload that boots it, which reads it into memory and deletes it.
+      async function takeMachine(id) {
+        if (!/^[0-9a-f-]{36}$/.test(id || '')) return null;
+        const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(FORKS);
+        const machine = await readMachine(await (await dir.getFileHandle(id + '.karkhana')).getFile());
+        await dir.removeEntry(id + '.karkhana');
+        if (machine.header.engine !== ENGINE_ID) throw new Error('the machine was saved by another engine (' + machine.header.engine + ')');
+        return machine;
+      }
       // A fork's copy is read into memory and deleted: like any scratch disk, a
       // fork does not survive a reload.
       async function takeFork(id) {
@@ -447,7 +463,13 @@
         const params = new URLSearchParams(location.search);
         let reason = 'requested with ?disk=scratch';
         let code = 'requested';
-        if (params.get('disk') === 'fork') {
+        if (params.get('disk') === 'fork' && params.get('machine')) {
+          let failure = 'its file is gone: a restored machine does not survive a reload';
+          const machine = await takeMachine(params.get('machine')).catch((error) => { failure = error.message; return null; });
+          if (machine) return { mode: 'scratch', reason: 'a machine restored from a file', code: 'machine', scratch: machine.disk, machine: true, forkOf: machine.header.forkOf || null };
+          reason = 'the machine could not be restored: ' + failure;
+          code = 'machine-gone';
+        } else if (params.get('disk') === 'fork') {
           const fork = await takeFork(params.get('fork')).catch((error) => { console.warn('karkhana: fork copy unavailable', error); return null; });
           if (fork) return { mode: 'scratch', reason: 'a fork of another tab\'s machine', code: 'fork', scratch: fork, forkOf: params.get('of') };
           reason = 'this fork\'s copy is gone: a fork does not survive a reload';
@@ -502,6 +524,10 @@
           let forkOf = guestDisk.forkOf || null;
           let diskMount = null;
           let backup = null;
+          // A machine file is a disk image holding a savevm snapshot of the
+          // running VM; a restored machine boots with -loadvm (see saveMachine).
+          const MACHINE_SNAPSHOT = 'karkhana-machine';
+          const restoring = !!guestDisk.machine;
           window.karkhana.disk = {
             mode: guestDisk.mode, reason: guestDisk.reason || null, created: !!disk?.created, persisted: null,
             get stats() { return disk ? { size: disk.size, ...disk.stats } : { size: scratch.size, held: scratch.bytesHeld, limit: scratch.limit }; },
@@ -649,6 +675,97 @@
             });
           }
 
+          // QEMU's monitor shares the console (-nographic): Ctrl-A c switches
+          // between them. While the page talks to the monitor the terminal shows
+          // nothing, so its replies stay out of the user's scrollback.
+          async function withMonitor(fn) {
+            let text = '';
+            const listen = (t) => { text += t; };
+            const settle = async (pattern, ms) => {
+              const deadline = Date.now() + ms;
+              while (!pattern.test(text)) {
+                if (Date.now() > deadline) throw new Error('QEMU\'s monitor did not answer');
+                await new Promise((r) => setTimeout(r, 50));
+              }
+              return text;
+            };
+            const ask = (command, ms = 30_000) => { text = ''; slave.ldisc.writeFromLower(command + '\r'); return settle(/\(qemu\) $/, ms); };
+            // Keys typed now would reach the monitor, not the guest.
+            const write = xterm.write;
+            xterm.write = (data, done) => { done?.(); };
+            xterm.options.disableStdin = true;
+            dataListeners.push(listen);
+            try {
+              slave.ldisc.writeFromLower('\x01c');
+              await settle(/\(qemu\) $/, 10_000);
+              return await fn(ask);
+            } finally {
+              slave.ldisc.writeFromLower('\x01c');
+              await new Promise((r) => setTimeout(r, 300));
+              dataListeners.splice(dataListeners.indexOf(listen), 1);
+              xterm.write = write;
+              xterm.options.disableStdin = false;
+            }
+          }
+
+          // "Save this machine": QEMU's savevm writes the VM's RAM and devices
+          // into the guest disk as a qcow2 internal snapshot. The page copies
+          // the disk while the guest is stopped, deletes the snapshot from the
+          // live disk, and lets the guest run on. savevm runs on QEMU's main
+          // loop thread; `migrate` would move block-layer coroutines to its own
+          // thread, which Emscripten's Asyncify fibers cannot resume. A save
+          // while a 9p request is in flight fails, and is tried again.
+          let saving = null;
+          function saveMachine() {
+            saving ??= (async () => {
+              const copy = await withMonitor(async (ask) => {
+                await ask('stop');
+                try {
+                  for (let attempt = 1; ; attempt++) {
+                    await new Promise((r) => setTimeout(r, 300));
+                    const error = /Error[^\r\n]*/.exec(await ask('savevm ' + MACHINE_SNAPSHOT, 600_000));
+                    if (!error) break;
+                    if (attempt === 10) throw new Error('QEMU could not save this machine: ' + error[0]);
+                  }
+                  const image = MemDisk.copyOf(disk || scratch);
+                  await ask('delvm ' + MACHINE_SNAPSHOT);
+                  return image;
+                } finally {
+                  await ask('cont');
+                }
+              });
+              const name = 'karkhana-' + new Date().toISOString().replace(/[:.]/g, '-') + '.karkhana';
+              const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('karkhana-machines', { create: true });
+              for await (const old of dir.keys()) await dir.removeEntry(old).catch(() => {});
+              const handle = await dir.getFileHandle(name, { create: true });
+              await writeMachine(await handle.createWritable(), {
+                disk: copy, state: new MemDisk(new Uint8Array(0)),
+                header: { engine: ENGINE_ID, savedAt: Date.now(), snapshot: MACHINE_SNAPSHOT, forkOf: disk ? disk.diskId : forkOf },
+              });
+              return handle.getFile();
+            })().finally(() => { saving = null; });
+            return saving;
+          }
+
+          // Opening a machine file copies it into OPFS and reloads into it: the
+          // disk and RAM can only change before QEMU starts.
+          async function openMachine(file) {
+            const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(FORKS, { create: true });
+            const id = crypto.randomUUID();
+            await file.stream().pipeTo(await (await dir.getFileHandle(id + '.karkhana', { create: true })).createWritable());
+            const url = new URL(location.pathname, location.href);
+            url.searchParams.set('disk', 'fork');
+            url.searchParams.set('machine', id);
+            location.href = url.href;
+          }
+          window.karkhana.machine = {
+            // Resolves to a File holding this machine, disk and RAM.
+            save: () => saveMachine(),
+            // Replaces this tab with the machine in a File; reloads.
+            open: (file) => openMachine(file),
+            get restored() { return !!restoring; },
+          };
+
           // "Fork this machine": a point-in-time copy of this tab's disk, left in
           // OPFS for one new scratch tab, which deletes it once loaded. Copies
           // nobody took are dropped after ten minutes.
@@ -722,6 +839,21 @@
                 throw error;
               }
             }));
+            $('cfg-machine-save').addEventListener('click', act(async () => {
+              diskStatusEl.textContent = 'disk: saving this machine…';
+              const file = await window.karkhana.machine.save();
+              const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: file.name });
+              link.click();
+              setTimeout(() => URL.revokeObjectURL(link.href), 60_000);
+              diskStatusEl.textContent = 'disk: saved this machine as ' + file.name + ' (' + Math.round(file.size / 1048576) + ' MB). Open it in Karkhana on any device to resume it.';
+            }));
+            $('cfg-machine-open').addEventListener('click', () => $('cfg-machine-file').click());
+            $('cfg-machine-file').addEventListener('change', act(async () => {
+              const file = $('cfg-machine-file').files[0];
+              if (!file) return;
+              diskStatusEl.textContent = 'disk: opening ' + file.name + '…';
+              await window.karkhana.machine.open(file);
+            }));
             $('cfg-scratch-tab').addEventListener('click', () => {
               const url = new URL(location.href);
               url.searchParams.set('disk', 'scratch');
@@ -730,14 +862,32 @@
           }
           // Not awaited: Firefox answers persist() with a permission prompt.
           navigator.storage?.persist?.().then((v) => { window.karkhana.disk.persisted = v; }, () => {});
-          Module['preRun'].push((mod) => { diskMount = mountDisk(mod.FS, disk || scratch); });
+          Module['preRun'].push((mod) => {
+            diskMount = mountDisk(mod.FS, disk || scratch);
+            // Emscripten holds this array; it is changed in place, before main().
+            if (restoring) {
+              const args = Module['arguments'];
+              args.splice(args.indexOf('-incoming'), 2, '-loadvm', MACHINE_SNAPSHOT);
+            }
+          });
+          // A restored machine prints nothing on its own: Ctrl-L asks bash (or a
+          // full-screen program) to redraw, which also shows the page it is ready.
+          // Then the snapshot is dropped from the disk, which no longer needs it.
+          if (restoring) {
+            const nudge = setInterval(() => {
+              if (!booted) { slave.ldisc.writeFromLower('\x0c'); return; }
+              clearInterval(nudge);
+              withMonitor((ask) => ask('delvm ' + MACHINE_SNAPSHOT)).catch((e) => console.warn('karkhana: snapshot kept', e));
+            }, 2000);
+          }
           // Third-party agents (aider, OpenCode, Claude Code, the OpenAI and Anthropic
           // SDKs) find the bridge through the standard variables. The key is a
           // placeholder: the SW swaps in the real one for this host only.
           for (const line of ['OPENAI_BASE_URL=http://api.karkhana.internal/v1', 'OPENAI_API_BASE=http://api.karkhana.internal/v1',
             'OPENAI_API_KEY=karkhana-bridge', 'ANTHROPIC_BASE_URL=http://api.karkhana.internal', 'ANTHROPIC_API_KEY=karkhana-bridge'])
             info += 'env: ' + line + '\n';
-          info += 'disk: vdb\n';
+          // The init prints the mode; the disk is mounted the same way in both.
+          info += 'disk: vdb\ndisk-mode: ' + (disk ? 'persistent' : 'scratch') + '\n';
           window.addEventListener('pagehide', () => { try { disk?.flush(); } catch (e) {} });
 
           // The persistent disk keeps /usr/local and /root by itself. A ksave
@@ -841,7 +991,7 @@
             } catch (e) { /* direct mode */ }
             if (mf) {
               const engineUrls = {};
-              const cache = await caches.open('karkhana-engine-d8b959a0d79c').catch(() => null);
+              const cache = await caches.open('karkhana-engine-1603f2949cae').catch(() => null);
               let done = 0;
               const total = Object.values(mf).reduce((a, f) => a + f.size, 0);
               // A reassembled engine is cached only after it matches the manifest.

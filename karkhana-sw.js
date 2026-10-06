@@ -4,7 +4,7 @@
 //    model-caching pattern).
 // 2) COOP/COEP headers on every response (coi-serviceworker pattern): SharedArrayBuffer
 //    works on static hosts that can't set headers (GitHub Pages, R2, etc.).
-const CACHE = 'karkhana-engine-d8b959a0d79c';
+const CACHE = 'karkhana-engine-1603f2949cae';
 const BIG = /\.(wasm|data|gzip)$/;
 
 // 3) BYOK agent bridge: the guest's agent talks to http(s)://api.karkhana.internal;

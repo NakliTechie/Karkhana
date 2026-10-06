@@ -1,0 +1,28 @@
+{
+ "qemu-system-x86_64.data": {
+  "parts": [
+   "qemu-system-x86_64.data.partaa",
+   "qemu-system-x86_64.data.partab",
+   "qemu-system-x86_64.data.partac",
+   "qemu-system-x86_64.data.partad",
+   "qemu-system-x86_64.data.partae",
+   "qemu-system-x86_64.data.partaf",
+   "qemu-system-x86_64.data.partag",
+   "qemu-system-x86_64.data.partah",
+   "qemu-system-x86_64.data.partai",
+   "qemu-system-x86_64.data.partaj",
+   "qemu-system-x86_64.data.partak",
+   "qemu-system-x86_64.data.partal"
+  ],
+  "size": 249135020,
+  "sha256": "02b5b5cb509b0faaceb34574aef3fd73dedc4f5d535b9e96fe3d5df0db2fc035"
+ },
+ "qemu-system-x86_64.wasm": {
+  "parts": [
+   "qemu-system-x86_64.wasm.partaa",
+   "qemu-system-x86_64.wasm.partab"
+  ],
+  "size": 41251077,
+  "sha256": "46cd2f415cf0a1aea0ceb2297a2ed173298314563b3b588188b53d18d8807fb0"
+ }
+}
