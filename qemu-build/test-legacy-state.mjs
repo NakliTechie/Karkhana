@@ -58,9 +58,10 @@ test('an old ksave archive moves onto a new disk once', { timeout: 4 * BOOT_MS }
   };
 
   await t.test('a first visit with an old archive restores it into the new disk', async () => {
-    // Seed OPFS from a same-origin page before Karkhana first runs.
-    await page.send('Page.navigate', { url: `${origin}/404.html` });
-    await sleep(1500);
+    // Seed OPFS from a same-origin page before Karkhana first runs: a static
+    // file the site serves (an empty 404 would load Chrome's own error page).
+    await page.send('Page.navigate', { url: `${origin}/mem-disk.js` });
+    await until('the same-origin page', () => page.evaluate(`location.origin === ${JSON.stringify(origin)} && !!navigator.storage`), 30_000);
     const tar = tarOf('root/from-ksave', 'legacy\n').toString('base64');
     await page.evaluate(`(async () => {
       const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('karkhana-persist', { create: true });
