@@ -46,6 +46,9 @@ export async function launch({ width = 1440, height = 810 } = {}) {
   const chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
     '--no-first-run', '--no-default-browser-check', `--window-size=${width},${height}`, 'about:blank'],
   { stdio: ['ignore', 'ignore', 'pipe'] });
+  // A test that throws before close() would leave Chrome running its guest.
+  const orphanGuard = () => chrome.kill();
+  process.once('exit', orphanGuard);
   const endpoint = await new Promise((resolve, reject) => {
     let log = '';
     chrome.on('error', reject);
@@ -87,6 +90,13 @@ export async function launch({ width = 1440, height = 810 } = {}) {
           if (exceptionDetails) throw new Error(`page threw: ${exceptionDetails.exception?.description || exceptionDetails.text}`);
           return result.value;
         },
+        // Reloads, and returns once the new document runs: the old one stays
+        // scriptable for a moment after Page.reload, and would answer for it.
+        async reload() {
+          await page.evaluate('window.__harnessOld = true');
+          await page.send('Page.reload');
+          await until('the reloaded page', () => page.evaluate('window.__harnessOld !== true').catch(() => false), 60_000);
+        },
         viewport: (w, h) => page.send('Emulation.setDeviceMetricsOverride',
           { width: w, height: h, deviceScaleFactor: 1, mobile: false }),
         close: () => send('Target.closeTarget', { targetId }),
@@ -94,6 +104,7 @@ export async function launch({ width = 1440, height = 810 } = {}) {
       return page;
     },
     async close() {
+      process.off('exit', orphanGuard);
       socket.close();
       chrome.kill();
       await new Promise((resolve) => chrome.once('exit', resolve));

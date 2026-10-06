@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { launch, serve, shell, sleep, until } from './browser-harness.mjs';
+import { launch, serve, shell, until } from './browser-harness.mjs';
 
 const ROOT = path.resolve(process.env.KARKHANA_ROOT || fileURLToPath(new URL('..', import.meta.url)));
 const PAGE = existsSync(path.join(ROOT, 'index.html')) ? 'index.html' : 'karkhana.html';
@@ -30,7 +30,7 @@ async function open(browser, url) {
     await until('the guest shell', () => page.evaluate('window.karkhana?.vm.state === "shell"'), BOOT_MS);
   };
   await boot();
-  const reload = async () => { await page.send('Page.reload'); await sleep(1000); await boot(); };
+  const reload = async () => { await page.reload(); await boot(); };
   return { page, reload, ...sh };
 }
 

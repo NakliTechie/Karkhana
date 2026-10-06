@@ -10,7 +10,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { launch, serve, shell, sleep, until } from './browser-harness.mjs';
+import { launch, serve, shell, until } from './browser-harness.mjs';
 
 const ROOT = path.resolve(process.env.KARKHANA_ROOT || fileURLToPath(new URL('..', import.meta.url)));
 const PAGE = existsSync(path.join(ROOT, 'index.html')) ? 'index.html' : 'karkhana.html';
@@ -80,8 +80,7 @@ test('an old ksave archive moves onto a new disk once', { timeout: 4 * BOOT_MS }
 
   await t.test('a reload does not apply it again', async () => {
     await sh.run('echo changed > /root/from-ksave && sync', COMMAND_MS);
-    await page.send('Page.reload');
-    await sleep(1000);
+    await page.reload();
     await boot();
     assert.equal(await page.evaluate('window.karkhana.disk.created'), false);
     assert.deepEqual(await sh.run('cat /root/from-ksave; test -e /persist/state.tar && echo staged || echo none', COMMAND_MS), ['changed', 'none']);

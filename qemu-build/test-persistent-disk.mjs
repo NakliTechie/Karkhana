@@ -70,8 +70,7 @@ test('the guest disk persists in OPFS', { timeout: 6 * BOOT_MS }, async (t) => {
 
   await t.test('files and the execute bit survive a reload, with no ksave', async () => {
     await first.run(`echo ${marker} > /root/kdisk-marker && printf '#!/bin/sh\\necho tool-ok\\n' > /usr/local/bin/kdisk-tool && chmod +x /usr/local/bin/kdisk-tool && sync`, COMMAND_MS);
-    await first.page.send('Page.reload');
-    await sleep(1000);
+    await first.page.reload();
     await until('the page script', () => first.page.evaluate('!!window.karkhana?.shell'), 30_000);
     await first.capture();
     await until('the guest shell after reload', () => first.page.evaluate('window.karkhana?.vm.state === "shell"'), BOOT_MS);

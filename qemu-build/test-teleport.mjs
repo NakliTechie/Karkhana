@@ -86,7 +86,8 @@ test('a running machine moves to another browser through a file', { timeout: 6 *
     const { root } = await b.page.send('DOM.getDocument', { depth: 0 });
     const { nodeId } = await b.page.send('DOM.querySelector', { nodeId: root.nodeId, selector: '#cfg-machine-file' });
     await b.page.send('DOM.setFileInputFiles', { nodeId, files: [file] });
-    await sleep(3000);
+    // The page stores the file, then navigates to it; wait for that page, not the old one.
+    await until('the restore page', () => b.page.evaluate("new URLSearchParams(location.search).has('machine')").catch(() => false), 120_000);
     await b.boot();
     assert.ok(!(await b.output()).includes('(qemu)'), 'the page talks to QEMU\'s monitor out of sight');
     assert.deepEqual(await b.page.evaluate('({ mode: window.karkhana.disk.mode, reason: window.karkhana.disk.reason, restored: window.karkhana.machine.restored })'),
@@ -102,8 +103,7 @@ test('a running machine moves to another browser through a file', { timeout: 6 *
   await t.test('the restored machine can be kept, and survives a reload', async () => {
     assert.equal(await b.page.evaluate("window.karkhana.disk.keep().then(() => 'kept', (e) => e.code || e.message)"), 'kept');
     await b.run('sync', COMMAND_MS);
-    await b.page.send('Page.reload');
-    await sleep(1000);
+    await b.page.reload();
     await b.boot();
     assert.equal(await b.page.evaluate('window.karkhana.disk.mode'), 'persistent');
     assert.deepEqual(await b.run('cat /root/tp-marker', COMMAND_MS), ['moved']);
