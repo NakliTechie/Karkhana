@@ -20,9 +20,8 @@ RUN printf '\nKarkhana / \340\244\225\340\244\276\340\244\260\340\244\226\340\27
     && echo 'root:x:0:0:root:/root:/bin/bash' > /etc/passwd \
     && echo 'PS1="karkhana:\w\$ "' >> /root/.bashrc
 
-# Node lives in /opt/node, not /usr/local: ksave tars /usr/local, and the
-# runtime must not ride in every save. Global npm installs still land in
-# /usr/local (prefix below), so installed agents persist as before.
+# Node lives in /opt/node, outside the user's /usr/local. Global npm installs
+# still land in /usr/local (prefix below), on the persistent disk.
 COPY --from=node /usr/local/bin/node /opt/node/bin/node
 COPY --from=node /usr/local/lib/node_modules/npm /opt/node/lib/node_modules/npm
 RUN ln -s /opt/node/bin/node /usr/bin/node \
@@ -62,14 +61,10 @@ RUN pip3 install --break-system-packages uv
 RUN printf '#!/bin/sh\nexec uv pip install --system --break-system-packages --index-url https://pypi.org/simple/ --allow-insecure-host pypi.org --allow-insecure-host files.pythonhosted.org "$@"\n' > /usr/local/bin/kpip \
     && chmod +x /usr/local/bin/kpip
 
-# Persistence: ksave tars mutable state INTO the pre-created /persist/state.tar
-# (guest-side file CREATE over 9p is broken upstream; writes into existing files
-# work), then bumps the pre-created .ksave-done nonce so the page auto-pulls the
-# bytes to OPFS. krestore (also run automatically at first login) reinstates.
-RUN printf '#!/bin/sh\ntar -cf /persist/state.tar -C / --exclude=root/.cache --exclude=root/.npm usr/local root 2>/dev/null && echo "ksave: $(wc -c </persist/state.tar) bytes staged" && date +%%s > /persist/.ksave-done\n' > /usr/local/bin/ksave \
-    && printf '#!/bin/sh\n[ -s /persist/state.tar ] && tar -xf /persist/state.tar -C / 2>/dev/null && echo "krestore: state reinstated"\n' > /usr/local/bin/krestore \
-    && chmod +x /usr/local/bin/ksave /usr/local/bin/krestore \
-    && printf '[ -s /persist/state.tar ] && [ ! -f /tmp/.krestored ] && tar -xf /persist/state.tar -C / 2>/dev/null && touch /tmp/.krestored && echo "karkhana: saved state restored (krestore)"\n' >> /root/.bashrc
+# Before the persistent disk, `ksave` kept /usr/local and /root in an archive.
+# A disk newly created in such a browser gets it once as /persist/state.tar
+# (the page stages it); this line unpacks it at the first prompt.
+RUN printf '[ -s /persist/state.tar ] && [ ! -f /tmp/.krestored ] && tar -xf /persist/state.tar -C / 2>/dev/null && touch /tmp/.krestored && echo "restored the state saved before the persistent disk"\n' >> /root/.bashrc
 
 WORKDIR /root
 CMD ["/bin/bash"]

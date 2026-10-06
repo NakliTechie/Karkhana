@@ -38,8 +38,13 @@ ARG BOCHS_REPO_VERSION=a88d1f687ec83ff82b5318f59dcecb8dab44fc83
 ARG QEMU_REPO=https://github.com/NakliTechie/qemu-wasm
 ARG QEMU_REPO_VERSION=7df55d6d2b65d7a38bfd91f0d92c9dbe1a176328
 
-ARG SOURCE_REPO=https://github.com/ktock/container2wasm
-ARG SOURCE_REPO_VERSION=v0.8.4
+# container2wasm, pinned: Karkhana's init and create-spec patches below apply to
+# this tree. Engines up to 1603f2949cae were built with `git clone -b main`, a
+# Docker layer cached since 2026-06-09: this commit, which the local c2w CLI also
+# reports. Later `main` renames the Go module to github.com/container2wasm/...,
+# so moving past this commit also means changing karkhana_disk.go's import.
+ARG SOURCE_REPO=https://github.com/container2wasm/container2wasm
+ARG SOURCE_REPO_VERSION=3f0f9be4d5ee201ea1a12f9700e6e3ef52c8b345
 
 ARG ZLIB_VERSION=1.3.2
 ARG GLIB_MINOR_VERSION=2.75
@@ -54,7 +59,7 @@ FROM ubuntu:22.04 AS assets-base
 ARG SOURCE_REPO
 ARG SOURCE_REPO_VERSION
 RUN apt-get update && apt-get install -y git
-RUN git clone -b ${SOURCE_REPO_VERSION} ${SOURCE_REPO} /assets
+RUN git clone ${SOURCE_REPO} /assets && git -C /assets checkout ${SOURCE_REPO_VERSION}
 # Karkhana carried patch: persistent guest disk. The page attaches a qcow2 image
 # as the second virtio disk (/dev/vdb): the user's OPFS disk, or the template in
 # memory when OPFS is unavailable. The container's overlay is mounted after the

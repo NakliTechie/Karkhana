@@ -21,7 +21,6 @@ echo "==> [2/2] c2w: converting $IMG to qemu-wasm (amd64) …"
 mkdir -p "$OUT"
 "$C2W" --to-js --target-arch=amd64 \
   --dockerfile "$DOCKERFILE" \
-  --build-arg SOURCE_REPO_VERSION=main \
   --build-arg VM_MEMORY_SIZE_MB=1792 \
   --build-arg LINUX_LOGLEVEL=0 \
   --build-arg QEMU_MIGRATION=true \

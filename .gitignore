@@ -77,6 +77,8 @@ qemu-build/*
 !qemu-build/test-fork-machine.mjs
 !qemu-build/test-machine-file.mjs
 !qemu-build/test-teleport.mjs
+!qemu-build/test-legacy-state.mjs
+!qemu-build/test-cpu-runtime.mjs
 !qemu-build/test-backup-browser.mjs
 !qemu-build/test-persistent-disk.mjs
 !qemu-build/browser-harness.mjs

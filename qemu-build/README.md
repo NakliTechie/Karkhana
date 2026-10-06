@@ -88,7 +88,7 @@ drift apart.
 
 Python 3.11 + uv (`kpip <pkg>` = tuned installer), Node 22, sqlite3, git, curl,
 `/usr/bin/agent` (OpenAI tool-loop agent; BYOK key never enters the VM),
-`ksave`/`krestore` (persistence), TERM=xterm-256color, 4 vCPUs (MTTCG), 1792M RAM.
+TERM=xterm-256color, 4 vCPUs (MTTCG), 1792M RAM. Persistence is the disk (below).
 
 ## Networking — two modes, auto-selected
 
@@ -477,12 +477,11 @@ visit; ⚙ then shows "resume backups". `karkhana.disk.backup` exposes `attach`,
 `node qemu-build/test-backup-browser.mjs` boots the page, backs up to an OPFS
 directory (headless Chrome has no folder picker), and restores from it.
 
-`ksave`/`krestore` are still in the guest; keeping the machine replaces them,
-and the next engine build removes them. A persistent boot does not
-stage `state.tar`, because restoring it would roll the disk back. The one
-exception is the boot that creates a disk: it restores an existing
-`state.tar` once and renames it `state.tar.migrated`.
-`karkhana.persist.forget()` in the console clears the saved archive.
+`ksave`/`krestore`, the archive-based persistence that predates the disk, are
+gone: the disk, "keep this machine" and machine files replace them. A browser
+that still holds an old `karkhana-persist/state.tar` gets it once, on the boot
+that creates its disk: the page stages it, the guest's `.bashrc` unpacks it at
+the first prompt, and the page renames it `state.tar.migrated`.
 `karkhana.disk` reports the mode, the fallback reason, and I/O counters.
 `karkhana.disk.forget()` deletes the disk; the reload creates a new one.
 

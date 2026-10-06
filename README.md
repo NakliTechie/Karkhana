@@ -89,8 +89,6 @@ karkhana.disk.fork()                   // copy this machine for a new scratch ta
 karkhana.machine.save()                // the running machine, disk and RAM, as a File
 karkhana.machine.open(file)            // resume a saved machine in this tab (reloads)
 karkhana.disk.backup.attach(dirHandle)  // back up to a folder; also now(), restore(dir), status
-karkhana.persist.pull()                // mirror a ksave archive to OPFS now
-karkhana.persist.forget()              // drop saved state
 karkhana.net                           // { mode, cert } — which network path is live
 karkhana.net.directFetch               // availability, request/byte/error counters
 karkhana.ai.gp.ask(prompt)             // on-device tier
