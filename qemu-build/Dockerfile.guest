@@ -1,7 +1,7 @@
 # Karkhana guest userland — modern 64-bit glibc Debian for qemu-wasm.
 # Replaces the v86 32-bit musl Alpine. This image is the container workload
 # c2w runs inside the qemu-wasm micro-VM; its rootfs becomes the browser guest.
-# Node 22: claude-code requires >=22; Debian 12 ships 18.
+# Node 22: current agent CLIs require >=22; Debian 12 ships 18.
 FROM node:22-bookworm-slim AS node
 
 FROM debian:12-slim
@@ -65,6 +65,12 @@ RUN printf '#!/bin/sh\nexec uv pip install --system --break-system-packages --in
 # A disk newly created in such a browser gets it once as /persist/state.tar
 # (the page stages it); this line unpacks it at the first prompt.
 RUN printf '[ -s /persist/state.tar ] && [ ! -f /tmp/.krestored ] && tar -xf /persist/state.tar -C / 2>/dev/null && touch /tmp/.krestored && echo "restored the state saved before the persistent disk"\n' >> /root/.bashrc
+
+# dsh confines each command with bubblewrap or Landlock, which this kernel
+# lacks, so it refuses to run them. The browser VM is the boundary here: one
+# home-level patch sets its danger-full-access preset for every dsh profile.
+RUN mkdir -p /root/.dsh \
+    && printf -- '- id: permission\n  config:\n    defaultPreset: danger-full-access\n' > /root/.dsh/cordis.patch.yml
 
 WORKDIR /root
 CMD ["/bin/bash"]
