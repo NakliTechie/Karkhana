@@ -1,6 +1,6 @@
 // Holds the persistent disk's OPFS sync access handle and serves the main
 // thread's requests (see opfs-disk.js). Runs as a module worker.
-import { CTL, ERRNO, META, OP, STATE, fetchDiskTemplate, isQcow2 } from './opfs-disk.js';
+import { CTL, ERRNO, FILLING, META, OP, STATE, fetchDiskTemplate, isQcow2 } from './opfs-disk.js';
 import { ChunkTracker } from './chunk-tracker.js';
 import { restoreReplica } from './replica.js';
 
@@ -28,9 +28,20 @@ self.onmessage = async ({ data }) => {
 
 const missing = (error) => { if (error.name === 'NotFoundError') return null; throw error; };
 
-async function open({ dir, name, templateUrl, restoreFrom }) {
+async function open({ dir, name, templateUrl, restoreFrom, replace }) {
   const root = await navigator.storage.getDirectory();
   const folder = await root.getDirectoryHandle(dir, { create: true });
+  // A replacing disk (a scratch tab's promotion, mem-disk.js) carries a marker
+  // until the page has moved the guest onto it. A marker found here means the
+  // tab closed mid-copy: that disk is incomplete, so it is dropped.
+  if (replace) {
+    await discard(folder, name);
+    await folder.getFileHandle(name + FILLING, { create: true });
+  } else if (await folder.getFileHandle(name + FILLING).catch(missing)) {
+    console.warn('karkhana disk: dropping a disk whose copy never finished');
+    await discard(folder, name);
+    await folder.removeEntry(name + FILLING);
+  }
   let file = await folder.getFileHandle(name).catch(missing);
   let created = false;
   let restored = false;
@@ -57,6 +68,14 @@ async function open({ dir, name, templateUrl, restoreFrom }) {
   if (kept) bitmap.read(kept, { at: 0 });
   if (restored) { bitmap.truncate(0); }
   return { handle, bitmap, dirty: kept, created, restored, diskId };
+}
+
+// Deletes the saved disk, unless another tab holds it: then the handle stays
+// busy and open() fails with 'busy'.
+async function discard(folder, name) {
+  const file = await folder.getFileHandle(name).catch(missing);
+  if (file) (await exclusive(file)).close();
+  for (const entry of [name, name + '.dirty', name + '.id']) await folder.removeEntry(entry).catch(missing);
 }
 
 // A stable id per disk, so a folder backup is never overwritten by another disk.

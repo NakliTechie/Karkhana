@@ -5,6 +5,7 @@
 // client is the shipped OpfsDisk, unchanged.
 // Run: node qemu-build/test-opfs-disk.mjs
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, readFile, writeFile, readdir } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
@@ -12,8 +13,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { Worker as NodeWorker } from 'node:worker_threads';
 import {
-  BOUNCE_BYTES, DiskError, ERRNO, isQcow2, mountOpfsDisk, openOpfsDisk,
+  BOUNCE_BYTES, DiskError, ERRNO, isQcow2, mountDisk, openOpfsDisk,
 } from './disk/opfs-disk.js';
+import { MemDisk } from './disk/mem-disk.js';
 
 const WORKER = new URL('./disk/opfs-disk-worker.js', import.meta.url);
 // openOpfsDisk checks for OPFS on the page; the worker thread supplies the real stand-in.
@@ -72,7 +74,11 @@ class DirHandle {
     if (!fs.existsSync(f)) { if (!create) throw err('NotFoundError', name); fs.writeFileSync(f, ''); }
     return new FileHandle(f);
   }
-  async removeEntry(name) { fs.rmSync(path.join(this.dir, name), { recursive: true }); }
+  async removeEntry(name) {
+    const p = path.join(this.dir, name);
+    if (!fs.existsSync(p)) throw err('NotFoundError', name);
+    fs.rmSync(p, { recursive: true });
+  }
   async *keys() { for (const n of fs.readdirSync(this.dir)) if (!n.endsWith('.swap')) yield n; }
 }
 Object.defineProperty(globalThis, 'navigator', { value: { storage: { getDirectory: async () => new DirHandle(root) } } });
@@ -114,11 +120,21 @@ async function withDisk(options, fn) {
   await writeFile(bootstrap, BOOTSTRAP);
   globalThis.Worker = workerClass(root, lockDir, bootstrap, options);
   const opened = [];
-  const open = async () => {
-    const disk = await openOpfsDisk({ workerUrl: 'unused', templateUrl: 'http://template.invalid/kdisk.qcow2.gz' });
+  const open = async (options = {}) => {
+    const disk = await openOpfsDisk({ workerUrl: 'unused', templateUrl: 'http://template.invalid/kdisk.qcow2.gz', ...options });
     opened.push(disk);
     return disk;
   };
+  // finish() runs on the page, against the same directory.
+  navigator.storage.getDirectory = async () => ({
+    getDirectoryHandle: async (dir) => ({
+      removeEntry: async (name) => {
+        const file = path.join(root, dir, name);
+        if (!existsSync(file)) throw new DOMException(name, 'NotFoundError');
+        await rm(file);
+      },
+    }),
+  });
   try {
     await fn({ root, open, file: path.join(root, 'karkhana-disk', 'disk.qcow2') });
   } finally {
@@ -226,12 +242,64 @@ test('a quota failure surfaces as ENOSPC, not a hang', async () => {
   });
 });
 
+test('replace starts a new disk in place of the saved one, marked until finish()', async () => {
+  const image = template(8192);
+  await withDisk({ template: image }, async ({ root, open, file }) => {
+    const saved = await open();
+    saved.write(new Uint8Array(4).fill(9), 0, 4, 100);
+    saved.close();
+    const fresh = await open({ replace: true });
+    assert.equal(fresh.created, true);
+    assert.notEqual(fresh.diskId, saved.diskId, 'a new disk gets a new identity');
+    const back = new Uint8Array(image.length);
+    fresh.read(back, 0, image.length, 0);
+    assert.deepEqual(back, image, 'the saved disk is gone');
+    const dir = path.join(root, 'karkhana-disk');
+    assert.ok((await readdir(dir)).includes('disk.qcow2.filling'));
+    await fresh.finish();
+    assert.deepEqual((await readdir(dir)).sort(), ['disk.qcow2', 'disk.qcow2.dirty', 'disk.qcow2.id']);
+    fresh.close();
+    const again = await open();
+    assert.equal(again.created, false, 'a finished disk is kept');
+    assert.equal(again.diskId, fresh.diskId);
+    assert.ok(file);
+  });
+});
+
+test('a disk whose copy never finished is dropped at the next open', async () => {
+  const image = template(8192);
+  await withDisk({ template: image }, async ({ root, open }) => {
+    const half = await open({ replace: true });
+    half.write(new Uint8Array(4).fill(7), 0, 4, 100);
+    half.close();
+    const next = await open();
+    assert.equal(next.created, true);
+    assert.notEqual(next.diskId, half.diskId);
+    const back = new Uint8Array(4);
+    next.read(back, 0, 4, 100);
+    assert.deepEqual(back, image.subarray(100, 104));
+    assert.ok(!(await readdir(path.join(root, 'karkhana-disk'))).includes('disk.qcow2.filling'));
+  });
+});
+
+test('replace is busy while another tab holds the disk, and leaves it alone', async () => {
+  await withDisk({ template: template(4096) }, async ({ root, open }) => {
+    const held = await open();
+    held.write(new Uint8Array(4).fill(5), 0, 4, 64);
+    await assert.rejects(open({ replace: true }), (error) => error.code === 'busy');
+    const back = new Uint8Array(4);
+    held.read(back, 0, 4, 64);
+    assert.deepEqual([...back], [5, 5, 5, 5]);
+    assert.ok(!(await readdir(path.join(root, 'karkhana-disk'))).includes('disk.qcow2.filling'));
+  });
+});
+
 test('isQcow2 checks the magic', () => {
   assert.equal(isQcow2(new Uint8Array(QCOW2)), true);
   assert.equal(isQcow2(new Uint8Array([0x1f, 0x8b, 0, 0])), false);
 });
 
-// A stand-in for the subset of Emscripten's FS that mountOpfsDisk touches.
+// A stand-in for the subset of Emscripten's FS that mountDisk touches.
 function fakeFS() {
   let inode = 1;
   class ErrnoError extends Error { constructor(errno) { super(`errno ${errno}`); this.errno = errno; } }
@@ -255,11 +323,11 @@ function fakeFS() {
   return FS;
 }
 
-test('mountOpfsDisk maps the Emscripten FS ops onto the disk', async () => {
+test('mountDisk maps the Emscripten FS ops onto the disk', async () => {
   await withDisk({ template: template(8192) }, async ({ open }) => {
     const disk = await open();
     const FS = fakeFS();
-    mountOpfsDisk(FS, disk);
+    mountDisk(FS, disk);
     const root = FS.mounts['/kdisk'];
     assert.deepEqual(root.node_ops.readdir(root), ['.', '..', 'disk.qcow2']);
     assert.throws(() => root.node_ops.lookup(root, 'other'), (e) => e.errno === ERRNO.ENOENT);
@@ -291,4 +359,22 @@ test('mountOpfsDisk maps the Emscripten FS ops onto the disk', async () => {
     disk.close();
     assert.throws(() => file.stream_ops.read(stream, out, 0, 4, 0), (e) => e instanceof FS.ErrnoError && e.errno === ERRNO.EIO);
   });
+});
+
+test('mountDisk serves a scratch disk, and use() moves the open file to another disk', () => {
+  const FS = fakeFS();
+  const scratch = new MemDisk(template(4096));
+  const mount = mountDisk(FS, scratch);
+  const root = FS.mounts['/kdisk'];
+  const file = root.node_ops.lookup(root, 'disk.qcow2');
+  const stream = { node: file, position: 0 };
+  const out = new Int8Array(new SharedArrayBuffer(8));
+  file.stream_ops.read(stream, out, 0, 4, 0);
+  assert.deepEqual([...out.subarray(0, 4)], QCOW2.map((b) => (b << 24) >> 24));
+  const big = new MemDisk(new Uint8Array([1]), { pageBytes: 4096, limit: 4096 });
+  mount.use(big);
+  assert.equal(file.node_ops.getattr(file).size, 1, 'the same node now reports the other disk');
+  assert.equal(file.stream_ops.read(stream, out, 0, 4, 0), 1);
+  assert.equal(out[0], 1);
+  assert.throws(() => file.stream_ops.write(stream, new Int8Array(8), 0, 8, 8192), (e) => e instanceof FS.ErrnoError && e.errno === ERRNO.ENOSPC);
 });

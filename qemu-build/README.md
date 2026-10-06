@@ -286,7 +286,13 @@ placeholder `default` on chat-completions requests, and the published
 `test-opfs-disk.mjs` runs the real disk worker in a Node worker thread against
 a file-backed stand-in for OPFS with one handle per file. It covers seeding,
 bounce-buffer boundaries, growth, the busy fallback, the reload retry, quota
-errors, and the Emscripten FS ops.
+errors, replacing a disk, dropping an unfinished copy, and the Emscripten FS ops.
+`test-mem-disk.mjs` checks the scratch disk and promotion: 300 seeded runs of a
+guest writing, growing and shrinking the disk through the copy, each ending in a
+byte-identical disk at the switch.
+`node qemu-build/test-keep-machine.mjs` boots a scratch tab in headless Chrome,
+keeps the machine while a guest loop writes, and checks that the process lives
+on and that every line survives a reload. It also checks replacement and the busy refusal.
 
 `node qemu-build/test-persistent-disk.mjs` boots a tree in headless Chrome. It
 checks the mounted 16 GiB disk, survival of a reload and of an unsynced tab
@@ -340,7 +346,7 @@ Two modes, chosen by the page:
 | Mode | Backing | Survives the tab | When |
 |---|---|---|---|
 | Persistent | `karkhana-disk/disk.qcow2` in OPFS | yes | default |
-| Scratch | in-memory template copy, left unmounted; the upper layer stays tmpfs | no | `?disk=scratch`, a second tab, no OPFS sync handles |
+| Scratch | the template in page memory (`disk/mem-disk.js`), mounted the same way | no | `?disk=scratch`, a second tab, no OPFS sync handles |
 
 `disk/opfs-disk.js` mounts a one-file Emscripten filesystem at `/kdisk`.
 QEMU's file syscalls reach the page's main thread, which cannot use OPFS sync
@@ -363,6 +369,30 @@ The template and runtime disk must keep the same 16 GiB virtual size.
 A second tab cannot open the disk; OPFS grants one sync handle per file. After
 3 s of retries it boots in scratch mode, and the header says so. The retry
 covers a reload, where the previous page can still hold the handle.
+
+### Keeping a scratch machine
+
+A scratch tab keeps its disk in 1 MiB pages of page memory. Pages that are all
+zero are never stored, so a fresh scratch disk holds about 6 MiB. Past 2 GiB
+held, writes fail with ENOSPC rather than exhaust the tab's memory.
+
+⚙ → Disk → "keep this machine" (`karkhana.disk.keep()`) makes the scratch disk
+the browser's saved disk with no reboot. `promote()` in `disk/mem-disk.js`
+copies the pages into a new OPFS disk while the guest keeps writing. It then
+copies again every page written since the copy began and moves the open file
+onto the OPFS disk. Guest I/O reaches the disk through the main thread, so no
+write lands between the last copy and the switch. Running processes carry on,
+and the URL loses `?disk=scratch` so a reload opens the saved disk.
+
+A disk saved earlier is replaced only on a second click (`keep({ replace: true })`),
+and never while another tab holds it. The new disk carries a
+`disk.qcow2.filling` marker until the switch completes. A tab closed mid-copy
+leaves the marker, and the next boot drops that incomplete disk and starts fresh.
+"Open a scratch tab" opens `?disk=scratch` beside a persistent tab.
+
+The init still prints `karkhana disk: persistent` when it mounts the disk, in a
+scratch tab too. The header badge shows the real mode; the next engine build
+corrects the message.
 
 ### Folder backups (the storage ladder's second rung)
 
@@ -392,7 +422,8 @@ visit; ⚙ then shows "resume backups". `karkhana.disk.backup` exposes `attach`,
 `node qemu-build/test-backup-browser.mjs` boots the page, backs up to an OPFS
 directory (headless Chrome has no folder picker), and restores from it.
 
-`ksave`/`krestore` remain for scratch sessions. A persistent boot does not
+`ksave`/`krestore` are still in the guest; keeping the machine replaces them,
+and the next engine build removes them. A persistent boot does not
 stage `state.tar`, because restoring it would roll the disk back. The one
 exception is the boot that creates a disk: it restores an existing
 `state.tar` once and renames it `state.tar.migrated`.

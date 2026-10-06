@@ -71,6 +71,8 @@
         <button id="cfg-backup-now">back up now</button>
         <button id="cfg-backup-resume">resume backups</button>
         <button id="cfg-restore">restore from a folder…</button>
+        <button id="cfg-keep">keep this machine</button>
+        <button id="cfg-scratch-tab">open a scratch tab</button>
       </div>
       <div class="row"><label>Egress</label><input id="cfg-egress-url" placeholder="your nakli-egress Worker, e.g. https://nakli-egress.you.workers.dev — optional" /></div>
       <div class="row"><label>Secret</label><input id="cfg-egress-secret" type="password" placeholder="the Worker's EGRESS_SECRET" /></div>
@@ -112,7 +114,8 @@
       import './arg-module.js';
       import initEmscriptenModule from './out.js';
       import { createBrowserFetchBridge } from './browser-fetch.js';
-      import { fetchDiskTemplate, mountOpfsDisk, openOpfsDisk } from './opfs-disk.js';
+      import { fetchDiskTemplate, mountDisk, openOpfsDisk } from './opfs-disk.js';
+      import { MemDisk, promote } from './mem-disk.js';
       import { createBackup, pendingRestore } from './backup.js';
       import { DEFAULT_EGRESS_HOSTS, createEgress } from './egress.js';
 
@@ -419,26 +422,30 @@
       // Guest disk. QEMU attaches /kdisk/disk.qcow2 as /dev/vdb, and with
       // "disk: vdb" in /pack/info the guest puts the overlay's upper layer on it.
       // Persistent: the image lives in OPFS, so installs survive the tab
-      // (opfs-disk.js). Scratch: an in-memory copy of the template that the
-      // guest leaves unmounted, so writes stay in tmpfs and vanish with the tab.
+      // (opfs-disk.js). Scratch: the template copied into page memory
+      // (mem-disk.js), so writes vanish with the tab until "keep this machine"
+      // moves the running guest onto a new OPFS disk.
       // ?disk=scratch asks for scratch; another tab holding the disk, or a
       // browser without OPFS sync handles, forces it.
       const diskEl = document.getElementById('diskstate');
       const DISK_TEMPLATE = new URL('./kdisk.qcow2.gz', location.href);
+      const DISK_WORKER = new URL('./opfs-disk-worker.js', location.href);
       const diskReady = (async () => {
         let reason = 'requested with ?disk=scratch';
+        let code = 'requested';
         if (new URLSearchParams(location.search).get('disk') !== 'scratch') {
           try {
             // A restore chosen in the ⚙ panel (backup.js) lands here after its reload.
             const restoreFrom = await pendingRestore({ kvGet }).catch(() => null);
-            const disk = await openOpfsDisk({ workerUrl: new URL('./opfs-disk-worker.js', location.href), templateUrl: DISK_TEMPLATE, restoreFrom });
+            const disk = await openOpfsDisk({ workerUrl: DISK_WORKER, templateUrl: DISK_TEMPLATE, restoreFrom });
             return { mode: 'persistent', disk };
           } catch (error) {
+            code = error.code;
             reason = error.code === 'busy' ? 'another Karkhana tab is using the disk' : error.message;
             console.warn('karkhana: persistent disk unavailable', error);
           }
         }
-        return { mode: 'scratch', reason, template: await fetchDiskTemplate(DISK_TEMPLATE) };
+        return { mode: 'scratch', reason, code, template: await fetchDiskTemplate(DISK_TEMPLATE) };
       })();
 
       setState('booting'); setStage('starting network stack…', 5);
@@ -466,28 +473,51 @@
           })();
 
           const guestDisk = await diskReady;
-          const { disk } = guestDisk;
-          diskEl.textContent = 'disk: ' + guestDisk.mode;
-          diskEl.className = guestDisk.mode;
-          diskEl.title = disk ? 'installs and files stay in this browser across visits'
-            : 'nothing survives closing this tab: ' + guestDisk.reason;
+          // The OPFS disk once this tab is persistent. A scratch tab runs on the
+          // in-memory disk until "keep this machine" moves it onto a new one.
+          let disk = guestDisk.disk || null;
+          const scratch = disk ? null : new MemDisk(guestDisk.template);
+          let diskMount = null;
           window.karkhana.disk = {
             mode: guestDisk.mode, reason: guestDisk.reason || null, created: !!disk?.created, persisted: null,
-            get stats() { return disk ? { size: disk.size, ...disk.stats } : null; },
+            get stats() { return disk ? { size: disk.size, ...disk.stats } : { size: scratch.size, held: scratch.bytesHeld, limit: scratch.limit }; },
             flush: () => disk?.flush(),
             // Deletes the disk and everything on it; the reload starts a new one.
             forget: async () => { await dropDisk(); location.reload(); },
+            // Scratch only: makes this tab's disk the saved one, without a reboot.
+            // Rejects with code 'exists' when a disk is saved already, unless
+            // { replace: true }; 'busy' while another tab uses that disk.
+            keep: (options) => keepMachine(options),
             backup: null,
           };
           async function dropDisk() {
             disk?.close();
             const root = await navigator.storage.getDirectory();
             const dir = await root.getDirectoryHandle('karkhana-disk', { create: true });
-            for (const name of ['disk.qcow2', 'disk.qcow2.dirty', 'disk.qcow2.id'])
+            for (const name of ['disk.qcow2', 'disk.qcow2.dirty', 'disk.qcow2.id', 'disk.qcow2.filling'])
               await dir.removeEntry(name).catch((e) => { if (e.name !== 'NotFoundError') throw e; });
           }
+          const savedDisk = async () => {
+            try {
+              const root = await navigator.storage.getDirectory();
+              await (await root.getDirectoryHandle('karkhana-disk')).getFileHandle('disk.qcow2');
+              return true;
+            } catch (e) { return false; }
+          };
+          const $ = (id) => document.getElementById(id);
+          const diskStatusEl = $('cfg-disk-status');
+          const showDisk = () => {
+            const { mode } = window.karkhana.disk;
+            diskEl.textContent = 'disk: ' + mode;
+            diskEl.className = mode;
+            diskEl.title = disk ? 'installs and files stay in this browser across visits'
+              : 'nothing survives closing this tab: ' + guestDisk.reason;
+            $('cfg-keep').hidden = !!disk || guestDisk.code === 'unsupported';
+            $('cfg-scratch-tab').hidden = !disk;
+            for (const id of ['cfg-backup', 'cfg-backup-now', 'cfg-backup-resume', 'cfg-restore'])
+              $(id).hidden = !disk || !window.showDirectoryPicker;
+          };
           // The Folder rung: a replica of this disk in a folder the user picks.
-          const diskStatusEl = document.getElementById('cfg-disk-status');
           const showDiskStatus = (b) => {
             const saved = b && b.savedAt ? ' · saved ' + new Date(b.savedAt).toLocaleString() : '';
             const backup = !b || b.state === 'off' ? 'no folder backup'
@@ -495,9 +525,9 @@
               : b.state === 'other-disk' ? b.folder + ' holds another disk\'s backup: restore it, or pick another folder'
               : b.state === 'error' ? 'backup error: ' + b.lastError
               : 'backing up to ' + b.folder + saved;
-            diskStatusEl.textContent = 'disk: ' + guestDisk.mode + (disk ? ' · ' + backup : ' · ' + guestDisk.reason);
+            diskStatusEl.textContent = 'disk: ' + window.karkhana.disk.mode + (disk ? ' · ' + backup : ' · ' + guestDisk.reason);
           };
-          if (disk) {
+          function usePersistentDisk() {
             const backup = createBackup({ disk, workerUrl: new URL('./replica-worker.js', location.href), kvGet, kvPut, onStatus: showDiskStatus });
             if (disk.restored) backup.clearPendingRestore();
             window.karkhana.disk.backup = {
@@ -511,13 +541,42 @@
               get status() { return backup.status; },
             };
             backup.resumeIfPermitted().catch((e) => console.warn('karkhana: backup not resumed', e));
+            showDisk();
+            showDiskStatus(backup.status);
           }
-          showDiskStatus(window.karkhana.disk.backup?.status);
+          // "Keep this machine": copies the scratch disk into a new OPFS disk
+          // while the guest runs on, then moves the mount onto it (mem-disk.js).
+          let keeping = null;
+          function keepMachine({ replace = false } = {}) {
+            if (disk) return Promise.resolve();
+            keeping ??= (async () => {
+              if (!replace && await savedDisk()) throw Object.assign(new Error('this browser already has a saved disk'), { code: 'exists' });
+              const next = await openOpfsDisk({ workerUrl: DISK_WORKER, templateUrl: DISK_TEMPLATE, replace: true }).catch((error) => {
+                throw error.code === 'busy' ? Object.assign(new Error('another Karkhana tab is using the saved disk: close it, then try again'), { code: 'busy' }) : error;
+              });
+              try {
+                await promote(scratch, next, {
+                  swap: (d) => { diskMount.use(d); disk = d; },
+                  onProgress: (n, total) => { diskStatusEl.textContent = 'disk: keeping this machine… ' + Math.round((100 * n) / total) + '%'; },
+                });
+              } catch (error) {
+                next.close();
+                throw error;
+              }
+              await disk.finish();
+              Object.assign(window.karkhana.disk, { mode: 'persistent', reason: null, created: true });
+              // A reload must open the saved disk, not start another scratch tab.
+              const url = new URL(location.href);
+              if (url.searchParams.get('disk') === 'scratch') { url.searchParams.delete('disk'); history.replaceState(history.state, '', url); }
+              usePersistentDisk();
+            })().finally(() => { keeping = null; });
+            return keeping;
+          }
+          if (disk) usePersistentDisk();
+          else { showDisk(); showDiskStatus(null); }
           {
             const pick = () => window.showDirectoryPicker({ mode: 'readwrite', id: 'karkhana-backup' });
             const act = (fn) => async () => { try { await fn(); } catch (e) { if (e.name !== 'AbortError') diskStatusEl.textContent = 'disk: ' + e.message; } };
-            const $ = (id) => document.getElementById(id);
-            if (!disk || !window.showDirectoryPicker) $('cfg-disk-actions').hidden = true;
             $('cfg-backup').addEventListener('click', act(async () => window.karkhana.disk.backup.attach(await pick())));
             $('cfg-backup-now').addEventListener('click', act(async () => window.karkhana.disk.backup.now()));
             $('cfg-backup-resume').addEventListener('click', act(async () => window.karkhana.disk.backup.resume()));
@@ -532,24 +591,36 @@
               diskStatusEl.textContent = 'disk: restoring replaces this browser\'s disk with the backup saved '
                 + new Date(found.savedAt).toLocaleString() + '. Click "restore from a folder…" again within 10 s to confirm.';
             }));
+            // Replacing a saved disk takes a second click, as restoring does.
+            let keepArmed = 0;
+            $('cfg-keep').addEventListener('click', act(async () => {
+              const replace = Date.now() < keepArmed;
+              keepArmed = 0;
+              try {
+                await window.karkhana.disk.keep({ replace });
+              } catch (e) {
+                if (e.code !== 'exists') throw e;
+                keepArmed = Date.now() + 10_000;
+                diskStatusEl.textContent = 'disk: keeping this machine replaces the disk already saved in this browser. Click "keep this machine" again within 10 s to confirm.';
+              }
+            }));
+            $('cfg-scratch-tab').addEventListener('click', () => {
+              const url = new URL(location.href);
+              url.searchParams.set('disk', 'scratch');
+              window.open(url, '_blank');
+            });
           }
           // Not awaited: Firefox answers persist() with a permission prompt.
           navigator.storage?.persist?.().then((v) => { window.karkhana.disk.persisted = v; }, () => {});
-          Module['preRun'].push((mod) => {
-            if (disk) return mountOpfsDisk(mod.FS, disk);
-            try { mod.FS.mkdir('/kdisk'); } catch (e) {}
-            mod.FS.writeFile('/kdisk/disk.qcow2', guestDisk.template);
-          });
+          Module['preRun'].push((mod) => { diskMount = mountDisk(mod.FS, disk || scratch); });
           // Third-party agents (aider, OpenCode, Claude Code, the OpenAI and Anthropic
           // SDKs) find the bridge through the standard variables. The key is a
           // placeholder: the SW swaps in the real one for this host only.
           for (const line of ['OPENAI_BASE_URL=http://api.karkhana.internal/v1', 'OPENAI_API_BASE=http://api.karkhana.internal/v1',
             'OPENAI_API_KEY=karkhana-bridge', 'ANTHROPIC_BASE_URL=http://api.karkhana.internal', 'ANTHROPIC_API_KEY=karkhana-bridge'])
             info += 'env: ' + line + '\n';
-          if (disk) {
-            info += 'disk: vdb\n';
-            window.addEventListener('pagehide', () => { try { disk.flush(); } catch (e) {} });
-          }
+          info += 'disk: vdb\n';
+          window.addEventListener('pagehide', () => { try { disk?.flush(); } catch (e) {} });
 
           // The persistent disk keeps /usr/local and /root by itself. A ksave
           // archive is restored once, into a newly created disk, then set aside:

@@ -4,7 +4,7 @@
 //   - files and the execute bit survive a reload, with no ksave,
 //   - work survives a tab closed without sync, after ext4's commit interval,
 //   - /tmp stays scratch,
-//   - a second tab falls back to scratch instead of sharing the disk, and
+//   - a second tab falls back to scratch (the in-memory disk) instead of sharing it, and
 //   - a first visit costs OPFS only the template plus what the session wrote.
 // Run: node qemu-build/test-persistent-disk.mjs
 // KARKHANA_ROOT serves another tree (default: the repository root); a staged
@@ -87,7 +87,7 @@ test('the guest disk persists in OPFS', { timeout: 6 * BOOT_MS }, async (t) => {
     const disk = await second.page.evaluate('window.karkhana.disk');
     assert.equal(disk.mode, 'scratch');
     assert.match(disk.reason, /another Karkhana tab/);
-    assert.ok(await rootSizeKB(second.run) < 4_000_000, 'scratch / must be the tmpfs layer');
+    assert.match(await second.output(), /karkhana disk: persistent\r/, 'scratch runs on the in-memory disk');
     assert.deepEqual(await second.run('test -e /root/kdisk-marker && echo present || echo absent', COMMAND_MS), ['absent']);
     await second.page.close();
   });

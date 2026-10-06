@@ -28,6 +28,7 @@
 !karkhana-tty.sh
 !opfs-disk.js
 !opfs-disk-worker.js
+!mem-disk.js
 !chunk-tracker.js
 !replica.js
 !replica-worker.js
@@ -70,6 +71,8 @@ qemu-build/*
 !qemu-build/test-egress-browser.mjs
 !qemu-build/test-ai-bridge-browser.mjs
 !qemu-build/test-replica.mjs
+!qemu-build/test-mem-disk.mjs
+!qemu-build/test-keep-machine.mjs
 !qemu-build/test-backup-browser.mjs
 !qemu-build/test-persistent-disk.mjs
 !qemu-build/browser-harness.mjs
@@ -77,6 +80,7 @@ qemu-build/*
 qemu-build/disk/*
 !qemu-build/disk/opfs-disk.js
 !qemu-build/disk/opfs-disk-worker.js
+!qemu-build/disk/mem-disk.js
 !qemu-build/disk/chunk-tracker.js
 !qemu-build/disk/replica.js
 !qemu-build/disk/replica-worker.js

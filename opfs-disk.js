@@ -20,6 +20,8 @@ export const META = { POS: 0, LEN: 1, RESULT: 2 };
 export const ERRNO = { EPERM: 63, ENOENT: 44, EIO: 29, EINVAL: 28, ENOSPC: 51 };
 
 const CALL_TIMEOUT_MS = 30_000;
+// Marks a disk opened with replace until finish(); see opfs-disk-worker.js.
+export const FILLING = '.filling';
 const QCOW2_MAGIC = [0x51, 0x46, 0x49, 0xfb];
 
 export class DiskError extends Error {
@@ -49,8 +51,8 @@ export async function fetchDiskTemplate(url) {
 export class OpfsDisk {
   // replicaPort and repl connect a replica (replica-worker.js) to the disk
   // worker's snapshots; see chunk-tracker.js.
-  constructor({ worker, ctl, meta, bounce, size, created, restored = false, diskId = null, replicaPort = null, repl = null }) {
-    Object.assign(this, { worker, ctl, meta, bounce, size, created, restored, diskId, replicaPort, repl });
+  constructor({ worker, ctl, meta, bounce, size, created, restored = false, diskId = null, replicaPort = null, repl = null, dir = null, name = null }) {
+    Object.assign(this, { worker, ctl, meta, bounce, size, created, restored, diskId, replicaPort, repl, dir, name });
     this.dead = false;
     this.stats = { reads: 0, writes: 0, bytesRead: 0, bytesWritten: 0, flushes: 0, errors: 0 };
   }
@@ -124,6 +126,13 @@ export class OpfsDisk {
   // Marks every chunk dirty, so the next snapshot copies the whole disk.
   markAll() { this.call(OP.MARK_ALL); }
 
+  // A disk opened with replace stays marked unfinished, and the next open
+  // discards it, until the page calls this once the disk holds the guest.
+  async finish() {
+    const folder = await (await navigator.storage.getDirectory()).getDirectoryHandle(this.dir);
+    await folder.removeEntry(this.name + FILLING).catch((error) => { if (error.name !== 'NotFoundError') throw error; });
+  }
+
   close() {
     if (this.dead) return;
     try { this.call(OP.CLOSE); } finally {
@@ -135,8 +144,9 @@ export class OpfsDisk {
 
 // Opens (creating from the template when absent) dir/name in OPFS. Rejects
 // with error.code 'busy' when another tab holds the disk, 'unsupported' when
-// the browser lacks OPFS sync handles, and 'failed' otherwise.
-export async function openOpfsDisk({ workerUrl, templateUrl, restoreFrom = null, dir = 'karkhana-disk', name = 'disk.qcow2' }) {
+// the browser lacks OPFS sync handles, and 'failed' otherwise. replace deletes
+// any saved disk first and starts a new one, unfinished until finish().
+export async function openOpfsDisk({ workerUrl, templateUrl, restoreFrom = null, replace = false, dir = 'karkhana-disk', name = 'disk.qcow2' }) {
   if (typeof SharedArrayBuffer === 'undefined' || !navigator.storage?.getDirectory) {
     throw Object.assign(new Error('this browser has no OPFS or shared memory'), { code: 'unsupported' });
   }
@@ -150,7 +160,7 @@ export async function openOpfsDisk({ workerUrl, templateUrl, restoreFrom = null,
     worker.onmessage = ({ data }) => resolve(data);
     worker.onerror = (event) => resolve({ ok: false, code: 'failed', error: event.message || 'disk worker failed to load' });
     worker.postMessage({ ctl: ctl.buffer, meta: meta.buffer, bounce, repl: repl.buffer, replicaPort: channel.port1, restoreFrom,
-      dir, name, templateUrl: String(templateUrl) }, [channel.port1]);
+      replace, dir, name, templateUrl: String(templateUrl) }, [channel.port1]);
   });
   worker.onmessage = worker.onerror = null;
   if (!opened.ok) {
@@ -158,12 +168,14 @@ export async function openOpfsDisk({ workerUrl, templateUrl, restoreFrom = null,
     throw Object.assign(new Error(opened.error), { code: opened.code });
   }
   return new OpfsDisk({ worker, ctl, meta, bounce, size: opened.size, created: opened.created, restored: opened.restored,
-    diskId: opened.diskId, replicaPort: channel.port2, repl });
+    diskId: opened.diskId, replicaPort: channel.port2, repl, dir, name });
 }
 
-// Mounts a one-file filesystem at mountpoint whose file is the disk. fsync on
-// the file reaches syncfs, which flushes the OPFS handle.
-export function mountOpfsDisk(FS, disk, mountpoint = '/kdisk', name = 'disk.qcow2') {
+// Mounts a one-file filesystem at mountpoint whose file is the disk: an
+// OpfsDisk, or a MemDisk (mem-disk.js). fsync on the file reaches syncfs,
+// which flushes the disk. use() moves the open file onto another disk with
+// the same contents, as a scratch disk's promotion does.
+export function mountDisk(FS, disk, mountpoint = '/kdisk', name = 'disk.qcow2') {
   const DIR = 0o040755;
   const FILE = 0o100644;
   const fsError = (error) => (error instanceof DiskError ? new FS.ErrnoError(error.errno) : error);
@@ -229,4 +241,5 @@ export function mountOpfsDisk(FS, disk, mountpoint = '/kdisk', name = 'disk.qcow
   };
   try { FS.mkdir(mountpoint); } catch (error) { /* already present */ }
   FS.mount(type, {}, mountpoint);
+  return { use(next) { disk = next; } };
 }
