@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -49,18 +50,29 @@ func handleTunneling(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
 		return
 	}
-	client_conn, _, err := hijacker.Hijack()
+	client_conn, buffered, err := hijacker.Hijack()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	go func() {
 		defer client_conn.Close()
-		l := newListener(&stringAddr{"tcp", proxyIP + ":80"}, client_conn)
+		// Some clients (Node's undici proxy agent) tunnel plain HTTP through
+		// CONNECT too. A TLS record starts with 0x16; anything else is HTTP.
+		first, err := buffered.Reader.Peek(1)
+		if err != nil {
+			return
+		}
+		plain := first[0] != 0x16
+		conn := &peekedConn{Conn: client_conn, r: buffered.Reader}
+		l := newListener(&stringAddr{"tcp", proxyIP + ":80"}, conn)
 		server := &http.Server{
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Scheme == "" {
 					r.URL.Scheme = "https"
+					if plain {
+						r.URL.Scheme = "http"
+					}
 				}
 				if r.URL.Host == "" {
 					r.URL.Host = serverURL.Host
@@ -74,8 +86,12 @@ func handleTunneling(w http.ResponseWriter, r *http.Request) {
 		server.TLSConfig = &tls.Config{
 			Certificates: []tls.Certificate{*cert},
 		}
-		log.Printf("serving server for %s...\n", serverURL.Host)
-		server.ServeTLS(l, "", "")
+		log.Printf("serving server for %s (plain=%v)...\n", serverURL.Host, plain)
+		if plain {
+			server.Serve(l)
+		} else {
+			server.ServeTLS(l, "", "")
+		}
 	}()
 }
 
@@ -138,6 +154,14 @@ func (l *listener) Accept() (net.Conn, error) {
 func (l *listener) Close() error { close(l.closeCh); return nil }
 
 func (l *listener) Addr() net.Addr { return l.addr }
+
+// peekedConn reads through the buffer that already holds the peeked bytes.
+type peekedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *peekedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 type stringAddr struct {
 	network string
