@@ -266,6 +266,19 @@ test('replace starts a new disk in place of the saved one, marked until finish()
   });
 });
 
+test('replace can carry the identity of the disk a fork came from', async () => {
+  await withDisk({ template: template(4096) }, async ({ open }) => {
+    const saved = await open();
+    saved.close();
+    const fresh = await open({ replace: true, identity: saved.diskId });
+    assert.equal(fresh.created, true);
+    assert.equal(fresh.diskId, saved.diskId);
+    await fresh.finish();
+    fresh.close();
+    assert.equal((await open()).diskId, saved.diskId);
+  });
+});
+
 test('a disk whose copy never finished is dropped at the next open', async () => {
   const image = template(8192);
   await withDisk({ template: image }, async ({ root, open }) => {

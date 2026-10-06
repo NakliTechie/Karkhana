@@ -112,3 +112,34 @@ test('a failed copy leaves the guest on its scratch disk', async () => {
   assert.equal(from.changed, null);
   assert.deepEqual(contents(from), image(8));
 });
+
+test('copyOf takes a disk as it stands, page by page, and skips zero pages', () => {
+  const source = new MemDisk(image(5), { pageBytes: PAGE });
+  source.write(new Uint8Array(PAGE), 0, PAGE, 2 * PAGE); // page 2 now all zeros
+  const copy = MemDisk.copyOf(source, { pageBytes: PAGE });
+  assert.equal(copy.size, source.size);
+  assert.ok(!copy.pages.has(2), 'a zero page is not held');
+  assert.deepEqual(contents(copy), contents(source));
+  copy.write(new Uint8Array([1, 2, 3]), 0, 3, 0);
+  assert.notDeepEqual(contents(copy), contents(source), 'the copy is independent');
+  assert.throws(() => MemDisk.copyOf(source, { pageBytes: PAGE, limit: 2 * PAGE }), (e) => e.errno === ERRNO.ENOSPC);
+});
+
+test('a disk written to a file and read back is the same disk, gaps included', async () => {
+  const disk = new MemDisk(image(3), { pageBytes: PAGE });
+  disk.write(new Uint8Array([7]), 0, 1, 9 * PAGE + 3);
+  let file = new Uint8Array(0);
+  const writable = {
+    async write({ type, position, data }) {
+      assert.equal(type, 'write');
+      if (position + data.length > file.length) { const grown = new Uint8Array(position + data.length); grown.set(file); file = grown; }
+      file.set(data, position);
+    },
+    async truncate(size) { const t = new Uint8Array(size); t.set(file.subarray(0, size)); file = t; },
+  };
+  await disk.writeTo(writable);
+  assert.equal(file.length, disk.size);
+  const back = await MemDisk.fromFile(new Blob([file]), { pageBytes: PAGE });
+  assert.deepEqual([...back.pages.keys()].sort((a, b) => a - b), [...disk.pages.keys()].sort((a, b) => a - b));
+  assert.deepEqual(contents(back), contents(disk));
+});

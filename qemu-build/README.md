@@ -292,7 +292,10 @@ guest writing, growing and shrinking the disk through the copy, each ending in a
 byte-identical disk at the switch.
 `node qemu-build/test-keep-machine.mjs` boots a scratch tab in headless Chrome,
 keeps the machine while a guest loop writes, and checks that the process lives
-on and that every line survives a reload. It also checks replacement and the busy refusal.
+on and that every line survives a reload. It also checks replacement, where the
+tab that held the disk runs on as scratch.
+`node qemu-build/test-fork-machine.mjs` forks a machine into two tabs, lets them
+diverge, keeps one, and checks the original runs on and the kept fork survives a reload.
 
 `node qemu-build/test-persistent-disk.mjs` boots a tree in headless Chrome. It
 checks the mounted 16 GiB disk, survival of a reload and of an unsynced tab
@@ -384,11 +387,25 @@ onto the OPFS disk. Guest I/O reaches the disk through the main thread, so no
 write lands between the last copy and the switch. Running processes carry on,
 and the URL loses `?disk=scratch` so a reload opens the saved disk.
 
-A disk saved earlier is replaced only on a second click (`keep({ replace: true })`),
-and never while another tab holds it. The new disk carries a
-`disk.qcow2.filling` marker until the switch completes. A tab closed mid-copy
-leaves the marker, and the next boot drops that incomplete disk and starts fresh.
+A disk saved earlier is replaced only on a second click (`keep({ replace: true })`).
+The tab holding it then moves onto a memory copy of its disk, synchronously so no
+write is lost, and runs on as scratch. A tab that cannot hold that copy (past the
+2 GiB limit) refuses, and the keep fails with `busy`. The tabs agree over a
+`BroadcastChannel`. The new disk carries a `disk.qcow2.filling` marker until the
+switch completes. A tab closed mid-copy leaves the marker, and the next boot drops
+that incomplete disk and starts fresh.
 "Open a scratch tab" opens `?disk=scratch` beside a persistent tab.
+
+### Forking a machine
+
+"Fork this machine" (`karkhana.disk.fork()`) copies this tab's disk in one
+synchronous pass, so the copy is the disk at one instant, as after a power cut.
+It leaves the copy in OPFS as `karkhana-forks/<id>.qcow2` and opens
+`?disk=fork&fork=<id>&of=<disk id>`. The new tab loads the copy into memory,
+deletes it, and runs as scratch. Copies nobody took are dropped after ten
+minutes. Forks diverge from each other and from the original. Keeping a fork
+replaces the saved machine and takes its identity (`of`), so folder backups carry
+on. A fork does not survive a reload, like any scratch tab.
 
 The init still prints `karkhana disk: persistent` when it mounts the disk, in a
 scratch tab too. The header badge shows the real mode; the next engine build

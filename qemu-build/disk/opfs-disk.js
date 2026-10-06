@@ -145,8 +145,9 @@ export class OpfsDisk {
 // Opens (creating from the template when absent) dir/name in OPFS. Rejects
 // with error.code 'busy' when another tab holds the disk, 'unsupported' when
 // the browser lacks OPFS sync handles, and 'failed' otherwise. replace deletes
-// any saved disk first and starts a new one, unfinished until finish().
-export async function openOpfsDisk({ workerUrl, templateUrl, restoreFrom = null, replace = false, dir = 'karkhana-disk', name = 'disk.qcow2' }) {
+// any saved disk first and starts a new one, unfinished until finish(), with
+// identity as its id when given (a fork replacing the disk it came from).
+export async function openOpfsDisk({ workerUrl, templateUrl, restoreFrom = null, replace = false, identity = null, dir = 'karkhana-disk', name = 'disk.qcow2' }) {
   if (typeof SharedArrayBuffer === 'undefined' || !navigator.storage?.getDirectory) {
     throw Object.assign(new Error('this browser has no OPFS or shared memory'), { code: 'unsupported' });
   }
@@ -160,7 +161,7 @@ export async function openOpfsDisk({ workerUrl, templateUrl, restoreFrom = null,
     worker.onmessage = ({ data }) => resolve(data);
     worker.onerror = (event) => resolve({ ok: false, code: 'failed', error: event.message || 'disk worker failed to load' });
     worker.postMessage({ ctl: ctl.buffer, meta: meta.buffer, bounce, repl: repl.buffer, replicaPort: channel.port1, restoreFrom,
-      replace, dir, name, templateUrl: String(templateUrl) }, [channel.port1]);
+      replace, identity, dir, name, templateUrl: String(templateUrl) }, [channel.port1]);
   });
   worker.onmessage = worker.onerror = null;
   if (!opened.ok) {

@@ -123,6 +123,10 @@ export function createBackup({ disk, workerUrl, kvGet, kvPut, onStatus = () => {
 
     now: backupNow,
 
+    // Stops backing up from this tab, keeping the stored folder: the tab that
+    // holds the disk next picks it up.
+    stop,
+
     async detach() {
       stop();
       await kvPut(DIR_KEY, null);

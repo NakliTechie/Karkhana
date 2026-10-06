@@ -41,6 +41,7 @@
          attribute was inert and the panel sat open above the terminal on every load. */
       #cfgpanel[hidden] { display:none; }
       #cfgpanel .row { display:flex; align-items:center; gap:10px; }
+      #cfgpanel .row.actions { flex-wrap:wrap; }
       #cfgpanel label { width:64px; color:var(--kk-ink-soft); }
       #cfgpanel input { flex:1; max-width:480px; background:var(--kk-row); border:1px solid var(--kk-line); color:var(--kk-ink); padding:4px 8px; border-radius:3px; font:inherit; }
       #cfgpanel input:focus { outline:none; border-color:var(--kk-act); }
@@ -72,6 +73,7 @@
         <button id="cfg-backup-resume">resume backups</button>
         <button id="cfg-restore">restore from a folder…</button>
         <button id="cfg-keep">keep this machine</button>
+        <button id="cfg-fork">fork this machine</button>
         <button id="cfg-scratch-tab">open a scratch tab</button>
       </div>
       <div class="row"><label>Egress</label><input id="cfg-egress-url" placeholder="your nakli-egress Worker, e.g. https://nakli-egress.you.workers.dev — optional" /></div>
@@ -426,14 +428,31 @@
       // (mem-disk.js), so writes vanish with the tab until "keep this machine"
       // moves the running guest onto a new OPFS disk.
       // ?disk=scratch asks for scratch; another tab holding the disk, or a
-      // browser without OPFS sync handles, forces it.
+      // browser without OPFS sync handles, forces it. ?disk=fork&fork=<id>
+      // boots on a copy another tab left in OPFS (karkhana-forks/<id>.qcow2).
       const diskEl = document.getElementById('diskstate');
       const DISK_TEMPLATE = new URL('./kdisk.qcow2.gz', location.href);
       const DISK_WORKER = new URL('./opfs-disk-worker.js', location.href);
+      const FORKS = 'karkhana-forks';
+      // A fork's copy is read into memory and deleted: like any scratch disk, a
+      // fork does not survive a reload.
+      async function takeFork(id) {
+        if (!/^[0-9a-f-]{36}$/.test(id || '')) return null;
+        const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(FORKS);
+        const disk = await MemDisk.fromFile(await (await dir.getFileHandle(id + '.qcow2')).getFile());
+        await dir.removeEntry(id + '.qcow2');
+        return disk;
+      }
       const diskReady = (async () => {
+        const params = new URLSearchParams(location.search);
         let reason = 'requested with ?disk=scratch';
         let code = 'requested';
-        if (new URLSearchParams(location.search).get('disk') !== 'scratch') {
+        if (params.get('disk') === 'fork') {
+          const fork = await takeFork(params.get('fork')).catch((error) => { console.warn('karkhana: fork copy unavailable', error); return null; });
+          if (fork) return { mode: 'scratch', reason: 'a fork of another tab\'s machine', code: 'fork', scratch: fork, forkOf: params.get('of') };
+          reason = 'this fork\'s copy is gone: a fork does not survive a reload';
+          code = 'fork-gone';
+        } else if (params.get('disk') !== 'scratch') {
           try {
             // A restore chosen in the ⚙ panel (backup.js) lands here after its reload.
             const restoreFrom = await pendingRestore({ kvGet }).catch(() => null);
@@ -476,18 +495,28 @@
           // The OPFS disk once this tab is persistent. A scratch tab runs on the
           // in-memory disk until "keep this machine" moves it onto a new one.
           let disk = guestDisk.disk || null;
-          const scratch = disk ? null : new MemDisk(guestDisk.template);
+          let scratch = disk ? null : guestDisk.scratch || new MemDisk(guestDisk.template);
+          let diskReason = guestDisk.reason || null;
+          // The saved disk this machine came from, if any: keeping it takes that
+          // disk's identity, so folder backups carry on.
+          let forkOf = guestDisk.forkOf || null;
           let diskMount = null;
+          let backup = null;
           window.karkhana.disk = {
             mode: guestDisk.mode, reason: guestDisk.reason || null, created: !!disk?.created, persisted: null,
             get stats() { return disk ? { size: disk.size, ...disk.stats } : { size: scratch.size, held: scratch.bytesHeld, limit: scratch.limit }; },
+            // The saved disk's identity; a fork carries the one it came from.
+            get id() { return disk ? disk.diskId : forkOf; },
             flush: () => disk?.flush(),
             // Deletes the disk and everything on it; the reload starts a new one.
             forget: async () => { await dropDisk(); location.reload(); },
             // Scratch only: makes this tab's disk the saved one, without a reboot.
             // Rejects with code 'exists' when a disk is saved already, unless
-            // { replace: true }; 'busy' while another tab uses that disk.
+            // { replace: true }: then a tab using that disk runs on as scratch,
+            // or the keep fails 'busy' when that tab cannot hold a copy.
             keep: (options) => keepMachine(options),
+            // Copies this tab's disk for a new scratch tab; resolves to its URL.
+            fork: () => forkMachine(),
             backup: null,
           };
           async function dropDisk() {
@@ -511,8 +540,9 @@
             diskEl.textContent = 'disk: ' + mode;
             diskEl.className = mode;
             diskEl.title = disk ? 'installs and files stay in this browser across visits'
-              : 'nothing survives closing this tab: ' + guestDisk.reason;
+              : 'nothing survives closing this tab: ' + diskReason;
             $('cfg-keep').hidden = !!disk || guestDisk.code === 'unsupported';
+            $('cfg-fork').hidden = guestDisk.code === 'unsupported';
             $('cfg-scratch-tab').hidden = !disk;
             for (const id of ['cfg-backup', 'cfg-backup-now', 'cfg-backup-resume', 'cfg-restore'])
               $(id).hidden = !disk || !window.showDirectoryPicker;
@@ -520,15 +550,15 @@
           // The Folder rung: a replica of this disk in a folder the user picks.
           const showDiskStatus = (b) => {
             const saved = b && b.savedAt ? ' · saved ' + new Date(b.savedAt).toLocaleString() : '';
-            const backup = !b || b.state === 'off' ? 'no folder backup'
+            const line = !b || b.state === 'off' ? 'no folder backup'
               : b.state === 'needs-permission' ? 'backups to ' + b.folder + ' paused: click "resume backups"'
               : b.state === 'other-disk' ? b.folder + ' holds another disk\'s backup: restore it, or pick another folder'
               : b.state === 'error' ? 'backup error: ' + b.lastError
               : 'backing up to ' + b.folder + saved;
-            diskStatusEl.textContent = 'disk: ' + window.karkhana.disk.mode + (disk ? ' · ' + backup : ' · ' + guestDisk.reason);
+            diskStatusEl.textContent = 'disk: ' + window.karkhana.disk.mode + (disk ? ' · ' + line : ' · ' + diskReason);
           };
           function usePersistentDisk() {
-            const backup = createBackup({ disk, workerUrl: new URL('./replica-worker.js', location.href), kvGet, kvPut, onStatus: showDiskStatus });
+            backup = createBackup({ disk, workerUrl: new URL('./replica-worker.js', location.href), kvGet, kvPut, onStatus: showDiskStatus });
             if (disk.restored) backup.clearPendingRestore();
             window.karkhana.disk.backup = {
               attach: (dir) => backup.attach(dir),
@@ -546,13 +576,18 @@
           }
           // "Keep this machine": copies the scratch disk into a new OPFS disk
           // while the guest runs on, then moves the mount onto it (mem-disk.js).
+          const busy = (why) => Object.assign(new Error('another Karkhana tab is using the saved disk' + (why ? ' (' + why + ')' : '') + ': close it, then try again'), { code: 'busy' });
           let keeping = null;
           function keepMachine({ replace = false } = {}) {
             if (disk) return Promise.resolve();
             keeping ??= (async () => {
               if (!replace && await savedDisk()) throw Object.assign(new Error('this browser already has a saved disk'), { code: 'exists' });
-              const next = await openOpfsDisk({ workerUrl: DISK_WORKER, templateUrl: DISK_TEMPLATE, replace: true }).catch((error) => {
-                throw error.code === 'busy' ? Object.assign(new Error('another Karkhana tab is using the saved disk: close it, then try again'), { code: 'busy' }) : error;
+              const open = () => openOpfsDisk({ workerUrl: DISK_WORKER, templateUrl: DISK_TEMPLATE, replace: true, identity: forkOf });
+              const next = await open().catch(async (error) => {
+                if (error.code !== 'busy') throw error;
+                const answer = await askToRelease();
+                if (!answer.ok) throw busy(answer.error);
+                return open().catch((again) => { throw again.code === 'busy' ? busy() : again; });
               });
               try {
                 await promote(scratch, next, {
@@ -563,14 +598,83 @@
                 next.close();
                 throw error;
               }
+              scratch = null;
+              diskReason = null;
+              forkOf = null;
               await disk.finish();
               Object.assign(window.karkhana.disk, { mode: 'persistent', reason: null, created: true });
               // A reload must open the saved disk, not start another scratch tab.
               const url = new URL(location.href);
-              if (url.searchParams.get('disk') === 'scratch') { url.searchParams.delete('disk'); history.replaceState(history.state, '', url); }
+              if (['scratch', 'fork'].includes(url.searchParams.get('disk'))) {
+                for (const key of ['disk', 'fork', 'of']) url.searchParams.delete(key);
+                history.replaceState(history.state, '', url);
+              }
               usePersistentDisk();
             })().finally(() => { keeping = null; });
             return keeping;
+          }
+
+          // The tab holding the saved disk gives it up when another tab keeps
+          // its machine in its place: it moves onto a memory copy of the disk
+          // (synchronous, so no guest write is lost) and runs on as scratch.
+          const diskChannel = new BroadcastChannel('karkhana-disk');
+          diskChannel.onmessage = ({ data }) => {
+            if (data?.type === 'release' && disk) diskChannel.postMessage({ type: 'released', id: data.id, ...releaseDisk() });
+          };
+          function releaseDisk() {
+            let copy;
+            try { copy = MemDisk.copyOf(disk); } catch (error) { return { ok: false, error: 'it cannot hold a copy: ' + error.message }; }
+            diskMount.use(copy);
+            const old = disk;
+            disk = null;
+            scratch = copy;
+            backup?.stop();
+            backup = null;
+            old.close();
+            forkOf = old.diskId;
+            diskReason = 'another tab kept its machine as the saved one';
+            Object.assign(window.karkhana.disk, { mode: 'scratch', reason: diskReason, backup: null });
+            showDisk();
+            showDiskStatus(null);
+            return { ok: true };
+          }
+          function askToRelease() {
+            const id = crypto.randomUUID();
+            return new Promise((resolve) => {
+              const done = (answer) => { clearTimeout(timer); diskChannel.removeEventListener('message', on); resolve(answer); };
+              const on = ({ data }) => { if (data?.type === 'released' && data.id === id) done(data); };
+              const timer = setTimeout(() => done({ ok: false, error: 'it did not answer' }), 15_000);
+              diskChannel.addEventListener('message', on);
+              diskChannel.postMessage({ type: 'release', id });
+            });
+          }
+
+          // "Fork this machine": a point-in-time copy of this tab's disk, left in
+          // OPFS for one new scratch tab, which deletes it once loaded. Copies
+          // nobody took are dropped after ten minutes.
+          async function forkMachine() {
+            const copy = MemDisk.copyOf(disk || scratch);
+            const id = crypto.randomUUID();
+            const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(FORKS, { create: true });
+            for await (const [name, handle] of dir.entries()) {
+              const stale = await handle.getFile().then((f) => Date.now() - f.lastModified > 600_000, () => false);
+              if (stale) await dir.removeEntry(name).catch(() => {});
+            }
+            const writable = await (await dir.getFileHandle(id + '.qcow2', { create: true })).createWritable();
+            try {
+              await copy.writeTo(writable);
+              await writable.close();
+            } catch (error) {
+              await writable.abort().catch(() => {});
+              await dir.removeEntry(id + '.qcow2').catch(() => {});
+              throw error;
+            }
+            const url = new URL(location.pathname, location.href);
+            url.searchParams.set('disk', 'fork');
+            url.searchParams.set('fork', id);
+            const of = disk ? disk.diskId : forkOf;
+            if (of) url.searchParams.set('of', of);
+            return url.href;
           }
           if (disk) usePersistentDisk();
           else { showDisk(); showDiskStatus(null); }
@@ -601,7 +705,21 @@
               } catch (e) {
                 if (e.code !== 'exists') throw e;
                 keepArmed = Date.now() + 10_000;
-                diskStatusEl.textContent = 'disk: keeping this machine replaces the disk already saved in this browser. Click "keep this machine" again within 10 s to confirm.';
+                diskStatusEl.textContent = 'disk: keeping this machine replaces the one saved in this browser; a tab using that one runs on as scratch. Click "keep this machine" again within 10 s to confirm.';
+              }
+            }));
+            // The tab opens on the click, while it still counts as a user gesture,
+            // and goes to the fork once its copy is written.
+            $('cfg-fork').addEventListener('click', act(async () => {
+              const tab = window.open('', '_blank');
+              diskStatusEl.textContent = 'disk: forking this machine…';
+              try {
+                const url = await window.karkhana.disk.fork();
+                if (tab) tab.location.href = url; else window.open(url, '_blank');
+                showDiskStatus(backup?.status ?? null);
+              } catch (error) {
+                tab?.close();
+                throw error;
               }
             }));
             $('cfg-scratch-tab').addEventListener('click', () => {

@@ -28,7 +28,7 @@ self.onmessage = async ({ data }) => {
 
 const missing = (error) => { if (error.name === 'NotFoundError') return null; throw error; };
 
-async function open({ dir, name, templateUrl, restoreFrom, replace }) {
+async function open({ dir, name, templateUrl, restoreFrom, replace, identity: given }) {
   const root = await navigator.storage.getDirectory();
   const folder = await root.getDirectoryHandle(dir, { create: true });
   // A replacing disk (a scratch tab's promotion, mem-disk.js) carries a marker
@@ -60,7 +60,7 @@ async function open({ dir, name, templateUrl, restoreFrom, replace }) {
     handle.close();
     throw new Error(`${dir}/${name} is not a qcow2 image`);
   }
-  diskId = await identity(folder, name, diskId || (created ? crypto.randomUUID() : null));
+  diskId = await identity(folder, name, diskId || (created ? given || crypto.randomUUID() : null));
   // One byte per chunk, which the next replica snapshot must carry. A disk with
   // no bitmap yet (older, or just created) starts all-dirty.
   const bitmap = await exclusive(await folder.getFileHandle(name + '.dirty', { create: true }));

@@ -7,6 +7,9 @@
 // writing, then re-copies what changed and switches the mount in one task.
 // Guest I/O reaches the disk through the main thread, so no guest write can
 // land between the last copy and the switch: the guest never sees a change.
+//
+// "Fork this machine" and the reverse of keeping (a tab giving up the saved
+// disk) both take copyOf(): a synchronous, so point-in-time, copy of a disk.
 
 import { DiskError, ERRNO } from './opfs-disk.js';
 
@@ -15,7 +18,17 @@ export const PAGE_BYTES = 1 << 20;
 // Past this the guest gets ENOSPC, before the tab runs out of memory.
 export const SCRATCH_LIMIT_BYTES = 2 * 1024 ** 3;
 
-const isZero = (bytes) => bytes.every((b) => b === 0);
+// Word-wise where the view is aligned: a fork scans the whole disk.
+function isZero(bytes) {
+  let i = 0;
+  if (bytes.byteOffset % 4 === 0) {
+    const words = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.length >> 2);
+    for (const w of words) if (w !== 0) return false;
+    i = words.length << 2;
+  }
+  for (; i < bytes.length; i++) if (bytes[i] !== 0) return false;
+  return true;
+}
 
 export class MemDisk {
   constructor(image, { limit = SCRATCH_LIMIT_BYTES, pageBytes = PAGE_BYTES } = {}) {
@@ -31,6 +44,40 @@ export class MemDisk {
     // size the disk had meanwhile.
     this.changed = null;
     this.minSize = this.size;
+  }
+
+  // A copy of any disk with read(buffer, offset, length, position): an
+  // OpfsDisk or a MemDisk. Synchronous, so no guest write lands mid-copy;
+  // ENOSPC when the copy would pass the limit.
+  static copyOf(source, options) {
+    const copy = new MemDisk(new Uint8Array(0), options);
+    const buf = new Uint8Array(copy.pageBytes);
+    for (let i = 0, at = 0; at < source.size; i++, at += copy.pageBytes) {
+      const part = buf.subarray(0, source.read(buf, 0, Math.min(copy.pageBytes, source.size - at), at));
+      if (!isZero(part)) copy.page(i).set(part);
+    }
+    copy.size = copy.minSize = source.size;
+    return copy;
+  }
+
+  // From a File or Blob holding an image, a page at a time.
+  static async fromFile(file, options) {
+    const disk = new MemDisk(new Uint8Array(0), options);
+    for (let i = 0, at = 0; at < file.size; i++, at += disk.pageBytes) {
+      const part = new Uint8Array(await file.slice(at, at + disk.pageBytes).arrayBuffer());
+      if (!isZero(part)) disk.page(i).set(part);
+    }
+    disk.size = disk.minSize = file.size;
+    return disk;
+  }
+
+  // Into a FileSystemWritableFileStream; gaps between pages read as zeros.
+  async writeTo(writable) {
+    for (const i of [...this.pages.keys()].sort((a, b) => a - b)) {
+      const at = i * this.pageBytes;
+      await writable.write({ type: 'write', position: at, data: this.pages.get(i).subarray(0, Math.min(this.pageBytes, this.size - at)) });
+    }
+    await writable.truncate(this.size);
   }
 
   get bytesHeld() { return this.pages.size * this.pageBytes; }

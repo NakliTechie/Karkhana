@@ -4,7 +4,7 @@
 //   - "keep this machine" moves the running guest onto a new OPFS disk with no
 //     reboot, while a guest process keeps writing through the copy,
 //   - everything the session wrote, /etc included, survives a reload,
-//   - a saved disk is replaced only when asked, and never while another tab uses it.
+//   - a saved disk is replaced only when asked, and the tab using it runs on as scratch.
 // Run: node qemu-build/test-keep-machine.mjs   (KARKHANA_ROOT and KARKHANA_URL as elsewhere)
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -88,14 +88,13 @@ test('a scratch tab becomes persistent without a reboot', { timeout: 6 * BOOT_MS
     assert.deepEqual(await a.run('cmp -s /root/ballast /root/ballast && wc -c < /root/ballast', COMMAND_MS), ['30000000']);
   });
 
-  await t.test('a saved disk is replaced only when asked, and not while in use', async () => {
+  await t.test('a saved disk is replaced only when asked; the tab using it runs on as scratch', async () => {
     const b = await open(browser, scratchUrl);
     await b.run('echo second-tab > /root/keep-marker', COMMAND_MS);
     assert.equal(await keep(b.page), 'exists');
-    assert.equal(await keep(b.page, { replace: true }), 'busy', 'tab a still holds the saved disk');
-    assert.deepEqual(await a.run('cat /root/keep-marker', COMMAND_MS), ['kept'], 'the saved disk is untouched');
-    await a.page.close();
     assert.equal(await keep(b.page, { replace: true }), 'kept');
+    assert.deepEqual(await disk(a.page), { mode: 'scratch', created: false, reason: 'another tab kept its machine as the saved one' });
+    assert.deepEqual(await a.run('cat /root/keep-marker', COMMAND_MS), ['kept'], 'tab a runs on its own copy');
     await b.run('sync', COMMAND_MS);
     await b.reload();
     assert.deepEqual(await disk(b.page), { mode: 'persistent', created: false, reason: null });

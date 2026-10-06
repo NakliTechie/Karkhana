@@ -73,6 +73,7 @@ qemu-build/*
 !qemu-build/test-replica.mjs
 !qemu-build/test-mem-disk.mjs
 !qemu-build/test-keep-machine.mjs
+!qemu-build/test-fork-machine.mjs
 !qemu-build/test-backup-browser.mjs
 !qemu-build/test-persistent-disk.mjs
 !qemu-build/browser-harness.mjs
