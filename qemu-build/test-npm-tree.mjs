@@ -3,7 +3,7 @@
 // Run: node --test qemu-build/test-npm-tree.mjs
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createNpmTree, parseSpec, pickVersion, registryEdge, walkNpmTree } from './net/npm-tree.js';
+import { createNpmTree, parseSpec, pickVersion, planInstall, registryEdge, walkNpmTree } from './net/npm-tree.js';
 
 const doc = (name, versions, latest = Object.keys(versions).at(-1)) => ({
   name, 'dist-tags': { latest }, modified: '2026-10-06T00:00:00Z',
@@ -100,4 +100,56 @@ test('the bridge processor streams the bundle in bounded chunks', async () => {
   assert.ok(requests.some(([href]) => href === 'https://registry.npmjs.org/@s%2fpeerish'), 'scoped names escape their slash');
   assert.ok(requests.every(([, accept]) => accept.startsWith('application/vnd.npm.install-v1+json')), 'abbreviated documents');
   await assert.rejects(tree.open({ npm: { specs: 'app' } }, new AbortController(), fetchRemote), /invalid npm request/);
+});
+
+// Node's lookup from a lockfile location, for checking a plan the way require() would.
+function resolveIn(packages, from, name) {
+  for (let dir = from; ; dir = dir.includes('/node_modules/') ? dir.slice(0, dir.lastIndexOf('/node_modules/')) : '') {
+    const key = (dir ? dir + '/' : '') + 'node_modules/' + name;
+    if (packages[key]) return packages[key];
+    if (!dir) return null;
+  }
+}
+
+test('the install plan hoists, nests on conflict, and satisfies every edge as Node resolves it', () => {
+  const registry = {
+    top: doc('top', { '1.0.0': { dependencies: { a: '1', b: '1' }, optionalDependencies: { o: '1' }, bin: 'cli.js' } }),
+    a: doc('a', { '1.0.0': { dependencies: { c: '^1' } } }),
+    b: doc('b', { '1.0.0': { dependencies: { c: '^2' } } }),
+    c: doc('c', { '1.0.0': {}, '2.0.0': {} }),
+    o: doc('o', { '1.0.0': { dependencies: { d: '1' }, os: ['win32'] } }),
+    d: doc('d', { '1.0.0': {} }),
+  };
+  const lock = planInstall(['top'], registry);
+  const p = lock.packages;
+  assert.equal(lock.lockfileVersion, 3);
+  assert.deepEqual(p[''].dependencies, { top: '*' });
+  assert.deepEqual(Object.keys(p).filter(Boolean).sort(), ['node_modules/a', 'node_modules/b', 'node_modules/b/node_modules/c',
+    'node_modules/c', 'node_modules/d', 'node_modules/o', 'node_modules/top']);
+  assert.equal(p['node_modules/c'].version, '1.0.0', 'the first, shallowest need takes the top');
+  assert.equal(p['node_modules/b/node_modules/c'].version, '2.0.0', 'the conflict nests under its dependent');
+  assert.deepEqual(p['node_modules/top'].bin, { top: 'cli.js' }, 'a string bin becomes a map');
+  assert.equal(p['node_modules/o'].optional, true);
+  assert.equal(p['node_modules/d'].optional, true, 'reachable only through an optional edge');
+  assert.equal(p['node_modules/a'].optional, undefined);
+  assert.deepEqual(p['node_modules/o'].os, ['win32'], 'platform fields kept, so npm can skip it');
+  assert.equal(p['node_modules/a'].resolved, 'https://registry.npmjs.org/a/-/a-1.0.0.tgz');
+  for (const [location, entry] of Object.entries(p)) {
+    if (!location) continue;
+    for (const [name, range] of Object.entries({ ...entry.dependencies })) {
+      const found = resolveIn(p, location, name);
+      assert.ok(found, `${location} finds ${name}`);
+      assert.ok(range === '*' || found.version.startsWith(range.replace(/[\^~]/g, '')), `${location} -> ${name}@${range} got ${found.version}`);
+    }
+  }
+});
+
+test('the plan accepts prereleases for empty and * ranges, and fails clearly on an unmatched required range', () => {
+  const registry = {
+    pre: doc('pre', { '0.2.0-rc.2': { dependencies: { plug: '1' } } }, '0.2.0-rc.2'),
+    plug: doc('plug', { '1.0.0': { peerDependencies: { pre: '*' } } }),
+  };
+  const lock = planInstall(['pre'], registry);
+  assert.deepEqual(Object.keys(lock.packages).filter(Boolean).sort(), ['node_modules/plug', 'node_modules/pre']);
+  assert.throws(() => planInstall(['plug@^9'], registry), /no version of plug matches \^9/);
 });

@@ -156,7 +156,15 @@ export function createNpmTree({ limits = NPM_LIMITS } = {}) {
         return readJSON(response, limits.docBytes, signal);
       };
       const tree = await walkNpmTree(npm.specs, fetchDoc, { signal, limits });
-      const body = encoder.encode(JSON.stringify({ format: 1, ms: Date.now() - started, ...tree }));
+      // With `plan`, one lockfile per spec, so the guest can run `npm ci` and
+      // skip npm's resolver; a spec that cannot be planned falls back to npm.
+      const plans = {}, planErrors = {};
+      if (npm.plan === true) {
+        for (const spec of npm.specs) {
+          try { plans[spec] = planInstall([spec], tree.packuments); } catch (error) { planErrors[spec] = error.message; }
+        }
+      }
+      const body = encoder.encode(JSON.stringify({ format: 1, ms: Date.now() - started, ...tree, plans, planErrors }));
       if (body.byteLength > limits.bundleBytes) throw failure('npm tree bundle exceeds size limit', 'blocked');
       let offset = 0;
       const stream = new ReadableStream({
@@ -170,4 +178,101 @@ export function createNpmTree({ limits = NPM_LIMITS } = {}) {
         headers: new Headers({ 'content-type': 'application/json' }), body: stream };
     },
   };
+}
+
+// The install layout, computed here so the guest's npm can skip its own
+// resolver (`npm ci` instead of `npm install`): each package goes as high in
+// node_modules as it can without a conflict, then a check pass nests a copy
+// wherever Node's lookup would find a version the range does not accept.
+// Returns a lockfileVersion 3 document for a root that depends on `specs`.
+export function planInstall(specs, packuments, { name = 'knpm-install' } = {}) {
+  const root = { name: '', parent: null, children: new Map(), edges: [] };
+  const edgesOf = (manifest) => {
+    const edges = [];
+    const meta = manifest.peerDependenciesMeta || {};
+    const bundled = new Set([].concat(manifest.bundleDependencies || manifest.bundledDependencies || []));
+    for (const [field, optional] of [['dependencies', false], ['optionalDependencies', true], ['peerDependencies', false]]) {
+      for (const [dep, value] of Object.entries(manifest[field] || {})) {
+        if (bundled.has(dep) || (field === 'peerDependencies' && meta[dep]?.optional)) continue;
+        if (field === 'dependencies' && manifest.optionalDependencies?.[dep]) continue;
+        const edge = registryEdge(dep, value);
+        if (edge) edges.push({ as: dep, ...edge, optional });
+      }
+    }
+    return edges;
+  };
+  root.edges = specs.map((spec) => ({ as: parseSpec(spec).name, ...parseSpec(spec), optional: false }));
+  const lookup = (node, as) => { for (let n = node; n; n = n.parent) if (n.children.has(as)) return n.children.get(as); return null; };
+  // As npm's arborist: '' and '*' accept any version, prereleases included.
+  const accepts = (child, edge) => child.name === edge.name && (!edge.range || edge.range === '*' ||
+    (validRange(edge.range) ? satisfies(child.version, edge.range, { loose: true }) : child.version === packuments[edge.name]?.['dist-tags']?.[edge.range]));
+  const queue = [root];
+  const place = (node, edge, nested) => {
+    const doc = packuments[edge.name];
+    const version = doc && pickVersion(doc, edge.range);
+    if (!version) {
+      if (edge.optional) return null;
+      throw failure(`no version of ${edge.name} matches ${edge.range || '*'}`, 'blocked');
+    }
+    let target = node;
+    if (!nested) for (let n = node; n && !n.children.has(edge.as); n = n.parent) target = n;
+    const manifest = doc.versions[version];
+    const child = { as: edge.as, name: edge.name, version, manifest, parent: target, children: new Map(), edges: edgesOf(manifest) };
+    target.children.set(edge.as, child);
+    queue.push(child);
+    return child;
+  };
+  // Shallow packages first, as npm does, so the common versions take the top.
+  for (let i = 0; i < queue.length; i++) {
+    const node = queue[i];
+    for (const edge of node.edges) {
+      const found = lookup(node, edge.as);
+      if (found && accepts(found, edge)) continue;
+      if (found && node.children.get(edge.as) === found) {
+        if (edge.optional) continue;
+        throw failure(`conflicting versions of ${edge.as} under one package`, 'blocked');
+      }
+      place(node, edge, false);
+    }
+  }
+  // Placing a package high can shadow what a deeper package found before it.
+  for (let pass = 0, changed = true; changed; pass++) {
+    if (pass > 50) throw failure('install layout did not settle', 'blocked');
+    changed = false;
+    for (let i = 0; i < queue.length; i++) {
+      const node = queue[i];
+      for (const edge of node.edges) {
+        const found = lookup(node, edge.as);
+        if (found && accepts(found, edge)) continue;
+        if (!found && edge.optional && !packuments[edge.name]) continue;
+        if (node.children.has(edge.as)) throw failure(`conflicting versions of ${edge.as} under ${node.name || 'the root'}@${node.version}: wants ${edge.range}, has ${node.children.get(edge.as).version}`, 'blocked');
+        if (place(node, edge, true)) changed = true;
+      }
+    }
+  }
+  // Packages reachable only through optional edges are optional, so npm may
+  // skip them on a platform they do not support.
+  const required = new Set();
+  const mark = (node) => {
+    for (const edge of node.edges) {
+      if (edge.optional) continue;
+      const found = lookup(node, edge.as);
+      if (found && !required.has(found)) { required.add(found); mark(found); }
+    }
+  };
+  mark(root);
+  const location = (node) => (node.parent === root ? '' : location(node.parent) + '/') + 'node_modules/' + node.as;
+  const packages = { '': { name, dependencies: Object.fromEntries(root.edges.map((e) => [e.as, e.range || '*'])) } };
+  for (const node of queue.slice(1).sort((a, b) => location(a).localeCompare(location(b)))) {
+    const m = node.manifest;
+    const entry = { version: node.version, resolved: m.dist?.tarball, integrity: m.dist?.integrity };
+    if (node.as !== node.name) entry.name = node.name;
+    for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta', 'engines', 'os', 'cpu', 'libc', 'license', 'deprecated'])
+      if (m[field] && (typeof m[field] !== 'object' || Object.keys(m[field]).length)) entry[field] = m[field];
+    if (m.bin) entry.bin = typeof m.bin === 'string' ? { [node.name.split('/').pop()]: m.bin } : m.bin;
+    if (m.hasInstallScript) entry.hasInstallScript = true;
+    if (!required.has(node)) entry.optional = true;
+    packages[location(node)] = entry;
+  }
+  return { name, lockfileVersion: 3, requires: true, packages };
 }

@@ -13,10 +13,12 @@ Usage: knpm <any npm command line>, e.g. knpm install -g opencode-ai
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, unquote, urlsplit
 
@@ -127,8 +129,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in ("/", "/-/ping"):
                 return self._send(200, b"{}")
-            if path.startswith("/-/t/"):
-                rest = path[len("/-/t/"):]
+            # npm may also swap this registry's host into registry tarball URLs.
+            tarball = path.startswith("/-/t/") or ("/-/" in path[1:] and path.endswith(".tgz"))
+            if tarball:
+                rest = path[len("/-/t/"):] if path.startswith("/-/t/") else unquote(path[1:])
                 if ".." in rest.split("/") or not rest:
                     return self._send(403, b'{"error":"blocked tarball path"}')
                 registry.stats["tarballs"] += 1
@@ -165,6 +169,103 @@ class Server(ThreadingHTTPServer):
         self.base = registry.base = f"http://127.0.0.1:{self.server_address[1]}"
 
 
+def global_prefix(env):
+    configured = env.get("npm_config_prefix") or env.get("NPM_CONFIG_PREFIX")
+    if configured:
+        return configured
+    result = subprocess.run(["npm", "prefix", "-g"], env=env, capture_output=True, text=True)
+    return result.stdout.strip() or "/usr/local"
+
+
+def package_name(spec):
+    at = spec.find("@", 1)
+    return spec if at == -1 else spec[:at]
+
+
+def _move_tree(staging_modules, name, target):
+    """npm's global layout: the package at lib/node_modules/<name>, its
+    dependencies in its own node_modules. Moves within one filesystem."""
+    if os.path.lexists(target):
+        shutil.rmtree(target) if os.path.isdir(target) and not os.path.islink(target) else os.unlink(target)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    os.rename(os.path.join(staging_modules, name), target)
+    modules = os.path.join(target, "node_modules")
+    os.makedirs(modules, exist_ok=True)
+    for entry in os.listdir(staging_modules):
+        source = os.path.join(staging_modules, entry)
+        if entry in (".package-lock.json", ".bin"):
+            continue
+        if entry.startswith("@"):
+            for sub in os.listdir(source):
+                if f"{entry}/{sub}" != name:
+                    os.makedirs(os.path.join(modules, entry), exist_ok=True)
+                    os.rename(os.path.join(source, sub), os.path.join(modules, entry, sub))
+        elif entry != name:
+            os.rename(source, os.path.join(modules, entry))
+    links = os.path.join(staging_modules, ".bin")
+    if os.path.isdir(links):
+        own = f"../{name}/"
+        os.makedirs(os.path.join(modules, ".bin"), exist_ok=True)
+        for link in os.listdir(links):
+            path = os.path.join(links, link)
+            if os.path.islink(path) and not os.readlink(path).startswith(own):
+                os.rename(path, os.path.join(modules, ".bin", link))
+
+
+def _link_bins(prefix, name, target):
+    with open(os.path.join(target, "package.json"), encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    bins = manifest.get("bin") or {}
+    if isinstance(bins, str):
+        bins = {name.split("/")[-1]: bins}
+    directory = os.path.join(prefix, "bin")
+    os.makedirs(directory, exist_ok=True)
+    linked = []
+    for command, path in bins.items():
+        if "/" in command or command in (".", ".."):
+            continue
+        executable = os.path.normpath(os.path.join(target, path))
+        if not executable.startswith(target + os.sep):
+            continue
+        os.chmod(executable, os.stat(executable).st_mode | 0o111)
+        link = os.path.join(directory, command)
+        if os.path.lexists(link):
+            os.unlink(link)
+        os.symlink(os.path.relpath(executable, directory), link)
+        linked.append(command)
+    return linked
+
+
+def install_global(spec, lockfile, prefix, env, extra=()):
+    """`npm ci` from the browser's plan, then npm's global layout. Returns npm's exit code."""
+    name = package_name(spec)
+    lib = os.path.join(prefix, "lib", "node_modules")
+    os.makedirs(lib, exist_ok=True)
+    staging = os.path.join(lib, f".knpm-{uuid.uuid4().hex[:12]}")
+    os.makedirs(staging)
+    try:
+        with open(os.path.join(staging, "package.json"), "w", encoding="utf-8") as stream:
+            json.dump({"name": lockfile.get("name", "knpm-install"), "private": True,
+                       "dependencies": lockfile["packages"][""]["dependencies"]}, stream)
+        base = env["npm_config_registry"].rstrip("/")
+        for entry in lockfile["packages"].values():
+            resolved = entry.get("resolved")
+            if isinstance(resolved, str) and resolved.startswith(REGISTRY + "/"):
+                entry["resolved"] = base + "/-/t/" + resolved[len(REGISTRY) + 1:]
+        with open(os.path.join(staging, "package-lock.json"), "w", encoding="utf-8") as stream:
+            json.dump(lockfile, stream)
+        result = subprocess.run(["npm", "ci", *extra], cwd=staging, env=env)
+        if result.returncode:
+            return result.returncode
+        target = os.path.join(lib, name)
+        _move_tree(os.path.join(staging, "node_modules"), name, target)
+        linked = _link_bins(prefix, name, target)
+        print(f"knpm: installed {name} into {target}" + (f"; commands: {', '.join(linked)}" if linked else ""), file=sys.stderr)
+        return 0
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 def npm_environment(base, environ=None):
     env = dict(os.environ if environ is None else environ)
     # The loopback registry must not go through the guest's HTTP proxy; any
@@ -196,7 +297,8 @@ def main(argv=None):
     if specs:
         started = time.monotonic()
         try:
-            with fetch(REGISTRY + "/", [], "GET", TIMEOUT_SECONDS, npm={"specs": specs}) as response:
+            plan = argv[0] in INSTALL_COMMANDS and ("-g" in argv or "--global" in argv)
+            with fetch(REGISTRY + "/", [], "GET", TIMEOUT_SECONDS, npm={"specs": specs, "plan": plan}) as response:
                 body = b"".join(response.iter_chunks())
             if response.status != 200:
                 raise BridgeError(f"HTTP {response.status}")
@@ -210,7 +312,20 @@ def main(argv=None):
     server = Server(Registry(fetch, bundle))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        result = subprocess.run(["npm", *argv], env=npm_environment(server.base))
+        env = npm_environment(server.base)
+        plans = (bundle or {}).get("plans") or {}
+        if specs and plans and all(spec in plans for spec in specs):
+            # Global installs skip npm's resolver: `npm ci` from the browser's plan.
+            prefix = global_prefix(env)
+            extra = [arg for arg in argv[1:] if arg in ("--ignore-scripts", "--omit=optional", "--foreground-scripts")]
+            for spec in specs:
+                code = install_global(spec, plans[spec], prefix, env, extra)
+                if code:
+                    return code
+            return 0
+        for spec, error in ((bundle or {}).get("planErrors") or {}).items():
+            print(f"knpm: no install plan for {spec} ({error}); npm resolves it", file=sys.stderr)
+        result = subprocess.run(["npm", *argv], env=env)
         stats = server.registry.stats
         print(f"knpm: served {stats['bundled']} documents from the bundle, fetched {stats['fetched']} more, "
               f"{stats['tarballs']} tarballs", file=sys.stderr)

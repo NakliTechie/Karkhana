@@ -99,6 +99,46 @@ class Loopback(unittest.TestCase):
         self.assertEqual(self.get("/-/ping")[0], 200)
 
 
+class GlobalLayout(unittest.TestCase):
+    def test_staging_moves_into_npms_global_layout_and_links_commands(self):
+        with tempfile.TemporaryDirectory() as prefix:
+            lib = Path(prefix, "lib", "node_modules")
+            staging = lib / ".knpm-x" / "node_modules"
+            files = {"@s/tool/package.json": json.dumps({"name": "@s/tool", "bin": {"tool": "bin/cli.js"}}),
+                     "@s/tool/bin/cli.js": "#!/usr/bin/env node\n", "@s/helper/index.js": "", "dep/index.js": "",
+                     "dep/node_modules/inner/index.js": "", ".package-lock.json": "{}"}
+            for path, text in files.items():
+                Path(staging, path).parent.mkdir(parents=True, exist_ok=True)
+                Path(staging, path).write_text(text)
+            (staging / ".bin").mkdir()
+            os.symlink("../@s/tool/bin/cli.js", staging / ".bin" / "tool")
+            os.symlink("../dep/index.js", staging / ".bin" / "dep")
+            target = str(lib / "@s" / "tool")
+            knpm._move_tree(str(staging), "@s/tool", target)
+            self.assertEqual(sorted(os.listdir(Path(target, "node_modules"))), [".bin", "@s", "dep"])
+            self.assertTrue(Path(target, "node_modules", "@s", "helper", "index.js").exists())
+            self.assertTrue(Path(target, "node_modules", "dep", "node_modules", "inner", "index.js").exists())
+            self.assertEqual(os.listdir(Path(target, "node_modules", ".bin")), ["dep"], "the package's own links are dropped")
+            self.assertEqual(knpm._link_bins(prefix, "@s/tool", target), ["tool"])
+            link = Path(prefix, "bin", "tool")
+            self.assertEqual(os.readlink(link), "../lib/node_modules/@s/tool/bin/cli.js")
+            self.assertTrue(os.access(link, os.X_OK))
+
+    def test_npm_style_tarball_paths_reach_the_bridge(self):
+        fetch = FakeFetch()
+        server = knpm.Server(knpm.Registry(fetch, {}))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+            connection.request("GET", "/@s/extra/-/extra-2.0.0.tgz")
+            response = connection.getresponse()
+            self.assertEqual((response.status, response.read()), (200, TARBALL))
+            self.assertEqual(fetch.calls[-1][0], "https://registry.npmjs.org/@s/extra/-/extra-2.0.0.tgz")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
 class CommandLine(unittest.TestCase):
     def test_specs_come_from_install_commands_only(self):
         self.assertEqual(knpm.install_specs(["install", "-g", "a", "@s/b@^2", "--prefix", "/x", "c@latest"]),
