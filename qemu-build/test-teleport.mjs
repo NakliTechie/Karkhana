@@ -85,6 +85,7 @@ test('a running machine moves to another browser through a file', { timeout: 6 *
     await b.page.send('DOM.setFileInputFiles', { nodeId, files: [file] });
     await sleep(3000);
     await b.boot();
+    assert.ok(!(await b.output()).includes('(qemu)'), 'the page talks to QEMU\'s monitor out of sight');
     assert.deepEqual(await b.page.evaluate('({ mode: window.karkhana.disk.mode, reason: window.karkhana.disk.reason, restored: window.karkhana.machine.restored })'),
       { mode: 'scratch', reason: 'a machine restored from a file', restored: true });
     assert.deepEqual(await b.run('echo $TP_VAR; cat /root/tp-marker', COMMAND_MS), ['only-in-ram', 'moved'], 'the same shell, the same disk');

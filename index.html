@@ -170,8 +170,11 @@
       // ---- boot progress: watch guest output for stage markers ----
       let booted = false, tail = '';
       const dataListeners = [];
+      // While the page holds QEMU's monitor, its replies go to the page alone.
+      let monitorTap = null;
       master.onWrite(([bytes]) => {
         const text = new TextDecoder().decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+        if (monitorTap) { monitorTap(text); return; }
         dataListeners.forEach(cb => { try { cb(text); } catch (e) {} });
         if (booted) return;
         tail = (tail + text).slice(-2000);
@@ -686,12 +689,12 @@
           // One monitor session at a time: a save must not overlap the
           // post-restore cleanup.
           let monitorTurn = Promise.resolve();
-          function withMonitor(fn) {
-            const session = monitorTurn.then(() => monitorSession(fn));
+          function withMonitor(fn, firstPromptMs) {
+            const session = monitorTurn.then(() => monitorSession(fn, firstPromptMs));
             monitorTurn = session.catch(() => {});
             return session;
           }
-          async function monitorSession(fn) {
+          async function monitorSession(fn, firstPromptMs = 10_000) {
             let text = '';
             const listen = (t) => { text += t; };
             const settle = async (pattern, ms) => {
@@ -709,15 +712,15 @@
             xterm.write = (data, done) => { done?.(); };
             xterm.options.disableStdin = true;
             monitorQueue = [];
-            dataListeners.push(listen);
+            monitorTap = listen;
             try {
               slave.ldisc.writeFromLower('\x01c');
-              await settle(/\(qemu\) $/, 10_000);
+              await settle(/\(qemu\) $/, firstPromptMs);
               return await fn(ask);
             } finally {
               slave.ldisc.writeFromLower('\x01c');
-              await new Promise((r) => setTimeout(r, 300));
-              dataListeners.splice(dataListeners.indexOf(listen), 1);
+              await new Promise((r) => setTimeout(r, 100));
+              monitorTap = null;
               xterm.write = write;
               xterm.options.disableStdin = false;
               const queued = monitorQueue;
@@ -888,15 +891,19 @@
               args.splice(args.indexOf('-incoming'), 2, '-loadvm', MACHINE_SNAPSHOT);
             }
           });
-          // A restored machine prints nothing on its own: Ctrl-L asks bash (or a
-          // full-screen program) to redraw, which also shows the page it is ready.
-          // Then the snapshot is dropped from the disk, which no longer needs it.
+          // A restored machine prints nothing on its own. Before the shell is
+          // announced, the page drops the restore snapshot from the disk; then
+          // Ctrl-L asks bash (or a full-screen program) to redraw, which shows
+          // the page the machine is ready. QEMU has the terminal once it turns
+          // canonical mode off: Ctrl-A c sent earlier would wait in a line buffer.
           if (restoring) {
-            const nudge = setInterval(() => {
-              if (!booted) { slave.ldisc.writeFromLower('\x0c'); return; }
-              clearInterval(nudge);
-              withMonitor((ask) => ask('delvm ' + MACHINE_SNAPSHOT)).catch((e) => console.warn('karkhana: snapshot kept', e));
-            }, 2000);
+            (async () => {
+              while (slave.ldisc.termios.ICANON_P) await new Promise((r) => setTimeout(r, 100));
+              await withMonitor((ask) => ask('delvm ' + MACHINE_SNAPSHOT), 120_000)
+                .catch((e) => console.warn('karkhana: snapshot kept', e));
+              const nudge = () => { if (!booted) { slave.ldisc.writeFromLower('\x0c'); setTimeout(nudge, 2000); } };
+              nudge();
+            })();
           }
           // Third-party agents (aider, OpenCode, Claude Code, the OpenAI and Anthropic
           // SDKs) find the bridge through the standard variables. The key is a
