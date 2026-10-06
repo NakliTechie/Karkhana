@@ -526,8 +526,61 @@ index b2e26e21205b6..0064810858e9b 100644
          pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
      }
 EOF
+# Carried cherry-pick: the coroutine half of ktock/qemu-wasm#51 by its author
+# (open upstream; its hw/sd/sd.c half is not needed: the x86 machine has no SD card).
+# Linear memory is committed, not reserved: a pooled coroutine held a 2MB
+# Asyncify buffer it never fills. 256KB buffers and a pool of 16 on Emscripten.
+COPY <<'EOF' /qemu-patches/coroutine-footprint.patch
+diff --git a/util/coroutine-fiber.c b/util/coroutine-fiber.c
+index a7920676abfd6..1d0ff819e002a 100644
+--- a/util/coroutine-fiber.c
++++ b/util/coroutine-fiber.c
+@@ -44,6 +44,13 @@ typedef struct {
+ QEMU_DEFINE_STATIC_CO_TLS(Coroutine *, current);
+ QEMU_DEFINE_STATIC_CO_TLS(CoroutineEmscripten *, leader);
+ size_t leader_asyncify_stack_size = COROUTINE_STACK_SIZE;
++/*
++ * Asyncify only stores the wasm locals of the frames being unwound, so a
++ * coroutine's buffer needs a few KB in practice; 256KB leaves a wide margin
++ * while keeping a pooled coroutine at ~1.25MB of committed wasm memory
++ * instead of 2MB (there is no lazy commit in linear memory).
++ */
++#define COROUTINE_ASYNCIFY_STACK_SIZE (256 << 10)
+ 
+ static void coroutine_trampoline(void *co_)
+ {
+@@ -64,7 +71,7 @@ Coroutine *qemu_coroutine_new(void)
+     co->stack_size = COROUTINE_STACK_SIZE;
+     co->stack = qemu_alloc_stack(&co->stack_size);
+ 
+-    co->asyncify_stack_size = COROUTINE_STACK_SIZE;
++    co->asyncify_stack_size = COROUTINE_ASYNCIFY_STACK_SIZE;
+     co->asyncify_stack = g_malloc0(co->asyncify_stack_size);
+     emscripten_fiber_init(&co->fiber, coroutine_trampoline, &co->base,
+                           co->stack, co->stack_size, co->asyncify_stack, co->asyncify_stack_size);
+diff --git a/util/qemu-coroutine.c b/util/qemu-coroutine.c
+index 5fd2dbaf8bb78..28158ca7e80a0 100644
+--- a/util/qemu-coroutine.c
++++ b/util/qemu-coroutine.c
+@@ -28,7 +28,12 @@
+  */
+ enum {
+     POOL_MIN_BATCH_SIZE = 64,
++#if defined(EMSCRIPTEN)
++    /* Linear memory is committed, not reserved: an idle stack is not free. */
++    POOL_INITIAL_MAX_SIZE = 16,
++#else
+     POOL_INITIAL_MAX_SIZE = 64,
++#endif
+ };
+ 
+ /** Free list to speed up creation */
+EOF
 RUN cd /qemu && git apply /qemu-patches/thread-stack.patch && \
     grep -q 'EMSCRIPTEN_THREAD_STACK_SIZE' util/qemu-thread-posix.c
+RUN cd /qemu && git apply /qemu-patches/coroutine-footprint.patch && \
+    grep -q 'COROUTINE_ASYNCIFY_STACK_SIZE (256 << 10)' util/coroutine-fiber.c && \
+    grep -q 'POOL_INITIAL_MAX_SIZE = 16' util/qemu-coroutine.c
 RUN cd /qemu && git apply /qemu-patches/9p-migrate.patch && \
     test "$(grep -c 'vmstate_v9fs_server' hw/9pfs/9p.c hw/9pfs/virtio-9p-device.c | awk -F: '{s+=$2} END {print s}')" -ge 3 && \
     ! grep -q 'Migration is disabled when VirtFS' hw/9pfs/9p.c
