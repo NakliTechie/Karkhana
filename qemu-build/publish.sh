@@ -50,6 +50,12 @@ if ! grep -q "karkhana-engine-$CACHE_VER" "$STAGE/karkhana.html" 2>/dev/null; th
     sed -i '' "s/karkhana-engine-v1/karkhana-engine-$CACHE_VER/g" "$STAGE/karkhana-sw.js" 2>/dev/null || true
 fi
 
+# The network proxy is cached the same way but can change without the engine.
+PROXY_VER="$(shasum -a 256 "$STAGE/c2w-net-proxy.wasm.gzip" | cut -c1-12)"
+sed -i '' "s/karkhana-proxy-[0-9a-z]*/karkhana-proxy-$PROXY_VER/g" "$STAGE/karkhana.html"
+grep -q "karkhana-proxy-$PROXY_VER" "$STAGE/karkhana.html" || { echo "FATAL: proxy version not stamped"; exit 1; }
+echo "==> proxy id: $PROXY_VER"
+
 if ! grep -q "karkhana-engine-$CACHE_VER" "$STAGE/karkhana.html"; then
     echo "FATAL: cache version not stamped — the SW would serve the previous engine."
     echo "       Expected 'karkhana-engine-v1' in $STAGE/karkhana.html to rewrite."

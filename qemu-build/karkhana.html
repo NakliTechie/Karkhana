@@ -223,7 +223,9 @@
             Module['websocket'] = { url: stackAddress };
             Stack.Start(stackAddress,
                         location.origin + location.pathname.replace(/[^/]*$/, '') + 'dist/stack-worker.js',
-                        location.origin + location.pathname.replace(/[^/]*$/, '') + 'c2w-net-proxy.wasm.gzip',
+                        // ?v= is the proxy's own content hash (publish.sh stamps it): the SW caches
+                        // .gzip cache-first by URL, so a new proxy needs a new URL.
+                        location.origin + location.pathname.replace(/[^/]*$/, '') + 'c2w-net-proxy.wasm.gzip?v=karkhana-proxy-v1',
                         (cert) => resolve({ mode: 'browser-fetch', cert }));
             setTimeout(() => resolve(null), 20000); // don't hold boot hostage if the stack stalls
           } catch (e) { console.error('net stack failed to start', e); resolve(null); }
