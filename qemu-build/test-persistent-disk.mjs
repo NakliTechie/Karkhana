@@ -87,7 +87,7 @@ test('the guest disk persists in OPFS', { timeout: 6 * BOOT_MS }, async (t) => {
     const disk = await second.page.evaluate('window.karkhana.disk');
     assert.equal(disk.mode, 'scratch');
     assert.match(disk.reason, /another Karkhana tab/);
-    assert.match(await second.output(), /karkhana disk: persistent\r/, 'scratch runs on the in-memory disk');
+    assert.match(await second.output(), /karkhana disk: scratch, in this tab's memory\r/, 'scratch runs on the in-memory disk');
     assert.deepEqual(await second.run('test -e /root/kdisk-marker && echo present || echo absent', COMMAND_MS), ['absent']);
     await second.page.close();
   });

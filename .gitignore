@@ -29,6 +29,7 @@
 !opfs-disk.js
 !opfs-disk-worker.js
 !mem-disk.js
+!machine-file.js
 !chunk-tracker.js
 !replica.js
 !replica-worker.js
@@ -74,6 +75,8 @@ qemu-build/*
 !qemu-build/test-mem-disk.mjs
 !qemu-build/test-keep-machine.mjs
 !qemu-build/test-fork-machine.mjs
+!qemu-build/test-machine-file.mjs
+!qemu-build/test-teleport.mjs
 !qemu-build/test-backup-browser.mjs
 !qemu-build/test-persistent-disk.mjs
 !qemu-build/browser-harness.mjs
@@ -82,6 +85,7 @@ qemu-build/disk/*
 !qemu-build/disk/opfs-disk.js
 !qemu-build/disk/opfs-disk-worker.js
 !qemu-build/disk/mem-disk.js
+!qemu-build/disk/machine-file.js
 !qemu-build/disk/chunk-tracker.js
 !qemu-build/disk/replica.js
 !qemu-build/disk/replica-worker.js

@@ -74,6 +74,8 @@ export async function launch({ width = 1440, height = 810 } = {}) {
     socket.send(JSON.stringify({ id, method, params, sessionId }));
   });
   return {
+    // Browser-level DevTools commands (Browser.setDownloadBehavior, ...).
+    send: (method, params) => send(method, params),
     async newPage() {
       const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
       const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });

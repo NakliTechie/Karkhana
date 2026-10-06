@@ -91,30 +91,45 @@ const (
 // karkhanaDisk runs after the snapshot restores and before cfg.PostMounts.
 // Its messages avoid "karkhana:", which the page reads as the shell prompt.
 func karkhanaDisk(cfg *inittype.BootConfig) {
-	if !karkhanaDiskRequested() {
+	requested, mode := karkhanaDiskRequested()
+	if !requested {
 		return
 	}
 	if err := karkhanaUseDisk(cfg); err != nil {
 		fmt.Printf("karkhana disk: unavailable (%v); this session uses scratch storage\n", err)
 		return
 	}
+	if mode == "scratch" {
+		fmt.Printf("karkhana disk: scratch, in this tab's memory\n")
+		return
+	}
 	fmt.Printf("karkhana disk: persistent\n")
 }
 
-func karkhanaDiskRequested() bool {
+// karkhanaDiskRequested reads "disk: vdb" and "disk-mode: persistent|scratch"
+// from the page's info file. The disk is mounted the same way in both modes;
+// only the page knows whether it lives in OPFS or in the tab's memory.
+func karkhanaDiskRequested() (bool, string) {
 	f, err := os.Open(filepath.Join("/mnt", packFSTag, "info"))
 	if err != nil {
-		return false
+		return false, ""
 	}
 	defer f.Close()
+	requested, mode := false, "persistent"
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		k, v, ok := strings.Cut(s.Text(), ":")
-		if ok && k == "disk" && strings.TrimSpace(v) == "vdb" {
-			return true
+		if !ok {
+			continue
+		}
+		switch k {
+		case "disk":
+			requested = requested || strings.TrimSpace(v) == "vdb"
+		case "disk-mode":
+			mode = strings.TrimSpace(v)
 		}
 	}
-	return false
+	return requested, mode
 }
 
 // karkhanaUseDisk mounts the disk and points the rootfs overlay's upper and
@@ -217,6 +232,300 @@ RUN git clone --depth 100 --branch build/9p-fix-8604 ${QEMU_REPO} /qemu && \
     git checkout ${QEMU_REPO_VERSION} && \
     git clone https://gitlab.com/qemu-project/dtc.git subprojects/dtc && \
     git -C subprojects/dtc checkout b6910bec11614980a21e46fbccc35934b671bd81
+# Karkhana carried patch: a guest with its 9p exports mounted can be saved and
+# restored. Upstream blocks migration once an export is mounted, because the
+# server's fid table is not part of the device state. The patch carries it
+# (fid, type, open flags, uid, path) in the virtio-9p device state; restored
+# files reopen on first use, the path an LRU-reclaimed fid already takes. A save
+# with 9p requests in flight fails and is retried. Karkhana's machine files
+# (savevm/loadvm of a running VM) depend on it: savevm checks the same blockers,
+# and Karkhana keeps /persist and the TLS certificate mounted all session.
+COPY <<'EOF' /qemu-patches/9p-migrate.patch
+diff --git a/hw/9pfs/9p.c b/hw/9pfs/9p.c
+index 46aa506..d6f0926 100644
+--- a/hw/9pfs/9p.c
++++ b/hw/9pfs/9p.c
+@@ -34,6 +34,8 @@
+ #include "coth.h"
+ #include "trace.h"
+ #include "migration/blocker.h"
++#include "migration/qemu-file-types.h"
++#include "migration/vmstate.h"
+ #include "qemu/xxhash.h"
+ #include <math.h>
+ 
+@@ -1494,20 +1496,11 @@ static void coroutine_fn v9fs_attach(void *opaque)
+     }
+ 
+     /*
+-     * disable migration if we haven't done already.
+-     * attach could get called multiple times for the same export.
++     * Karkhana: a mounted export no longer blocks migration. The fid table
++     * travels with the device state (vmstate_v9fs_server below), so a guest
++     * restored elsewhere keeps its mounts and open files.
+      */
+-    if (!s->migration_blocker) {
+-        error_setg(&s->migration_blocker,
+-                   "Migration is disabled when VirtFS export path '%s' is mounted in the guest using mount_tag '%s'",
+-                   s->ctx.fs_root ? s->ctx.fs_root : "NULL", s->tag);
+-        err = migrate_add_blocker(&s->migration_blocker, NULL);
+-        if (err < 0) {
+-            clunk_fid(s, fid);
+-            goto out;
+-        }
+-        s->root_fid = fid;
+-    }
++    s->root_fid = fid;
+ 
+     err = pdu_marshal(pdu, offset, "Q", &qid);
+     if (err < 0) {
+@@ -4355,3 +4348,125 @@ static void __attribute__((__constructor__)) v9fs_set_fd_limit(void)
+     open_fd_hw = rlim.rlim_cur - MIN(400, rlim.rlim_cur / 3);
+     open_fd_rc = rlim.rlim_cur / 2;
+ }
++
++/*
++ * Karkhana: migrate the server's per-mount state, so a guest saved with its
++ * exports mounted resumes with them working. A fid carries its number, type,
++ * open flags, uid and path; nothing host-side (fds, DIR streams). Restored
++ * files and directories start closed and reopen on first use through
++ * v9fs_reopen_fid(), the path an LRU-reclaimed fid already takes. The export
++ * must hold the same paths on the destination. xattr fids are transient and
++ * are not carried; requests in flight make the save fail, to be retried.
++ */
++static bool v9fs_fid_migrates(V9fsFidState *fidp)
++{
++    return !fidp->clunked && fidp->fid_type != P9_FID_XATTR;
++}
++
++static int put_v9fs_server(QEMUFile *f, void *pv, size_t size,
++                           const VMStateField *field, JSONWriter *vmdesc)
++{
++    V9fsState *s = pv;
++    GHashTableIter iter;
++    gpointer key;
++    V9fsFidState *fidp;
++    uint32_t count = 0;
++
++    qemu_put_be32(f, s->proto_version);
++    qemu_put_be32(f, s->msize);
++    qemu_put_be32(f, s->root_fid);
++    g_hash_table_iter_init(&iter, s->fids);
++    while (g_hash_table_iter_next(&iter, &key, (gpointer *) &fidp)) {
++        count += v9fs_fid_migrates(fidp);
++    }
++    qemu_put_be32(f, count);
++    g_hash_table_iter_init(&iter, s->fids);
++    while (g_hash_table_iter_next(&iter, &key, (gpointer *) &fidp)) {
++        if (!v9fs_fid_migrates(fidp)) {
++            continue;
++        }
++        qemu_put_be32(f, fidp->fid);
++        qemu_put_be32(f, fidp->fid_type);
++        qemu_put_be32(f, fidp->open_flags);
++        qemu_put_be32(f, fidp->uid);
++        qemu_put_be32(f, fidp->path.size);
++        qemu_put_buffer(f, (uint8_t *) fidp->path.data, fidp->path.size);
++    }
++    return 0;
++}
++
++static int get_v9fs_server(QEMUFile *f, void *pv, size_t size,
++                           const VMStateField *field)
++{
++    V9fsState *s = pv;
++    uint32_t count, i;
++
++    s->proto_version = qemu_get_be32(f);
++    s->msize = qemu_get_be32(f);
++    s->root_fid = qemu_get_be32(f);
++    count = qemu_get_be32(f);
++    for (i = 0; i < count; i++) {
++        int32_t fid = qemu_get_be32(f);
++        int fid_type = qemu_get_be32(f);
++        int open_flags = qemu_get_be32(f);
++        uid_t uid = qemu_get_be32(f);
++        uint32_t len = qemu_get_be32(f);
++        V9fsFidState *fidp;
++
++        if (qemu_file_get_error(f) || len > PATH_MAX + 1 ||
++            (fid_type != P9_FID_NONE && fid_type != P9_FID_FILE &&
++             fid_type != P9_FID_DIR)) {
++            return -EINVAL;
++        }
++        fidp = alloc_fid(s, fid);
++        if (!fidp) {
++            return -EINVAL;
++        }
++        /* alloc_fid() hands out a reference for the request that made it. */
++        fidp->ref = 0;
++        fidp->fid_type = fid_type;
++        /* Reopening must not create or truncate again. */
++        fidp->open_flags = open_flags & ~(O_CREAT | O_EXCL | O_TRUNC);
++        fidp->uid = uid;
++        fidp->path.size = len;
++        fidp->path.data = g_malloc(len);
++        qemu_get_buffer(f, (uint8_t *) fidp->path.data, len);
++        if (fid_type == P9_FID_FILE) {
++            fidp->fs.fd = -1;
++        }
++    }
++    return qemu_file_get_error(f);
++}
++
++static const VMStateInfo vmstate_info_v9fs_server = {
++    .name = "9p-server",
++    .get = get_v9fs_server,
++    .put = put_v9fs_server,
++};
++
++static int v9fs_server_pre_save(void *opaque)
++{
++    V9fsState *s = opaque;
++
++    if (!QLIST_EMPTY(&s->active_list)) {
++        error_report("9p export '%s' has requests in flight; save again",
++                     s->tag);
++        return -EBUSY;
++    }
++    return 0;
++}
++
++const VMStateDescription vmstate_v9fs_server = {
++    .name = "9p-server",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .pre_save = v9fs_server_pre_save,
++    .fields = (VMStateField[]) {
++        {
++            .name = "server",
++            .info = &vmstate_info_v9fs_server,
++            .flags = VMS_SINGLE,
++        },
++        VMSTATE_END_OF_LIST()
++    },
++};
+diff --git a/hw/9pfs/9p.h b/hw/9pfs/9p.h
+index a6f59ab..3b1ff64 100644
+--- a/hw/9pfs/9p.h
++++ b/hw/9pfs/9p.h
+@@ -469,6 +469,7 @@ V9fsPDU *pdu_alloc(V9fsState *s);
+ void pdu_free(V9fsPDU *pdu);
+ void pdu_submit(V9fsPDU *pdu, P9MsgHeader *hdr);
+ void v9fs_reset(V9fsState *s);
++extern const VMStateDescription vmstate_v9fs_server;
+ 
+ struct V9fsTransport {
+     ssize_t     (*pdu_vmarshal)(V9fsPDU *pdu, size_t offset, const char *fmt,
+diff --git a/hw/9pfs/virtio-9p-device.c b/hw/9pfs/virtio-9p-device.c
+index 5f522e6..776c3d9 100644
+--- a/hw/9pfs/virtio-9p-device.c
++++ b/hw/9pfs/virtio-9p-device.c
+@@ -233,6 +233,43 @@ static void virtio_9p_device_unrealize(DeviceState *dev)
+ 
+ /* virtio-9p device */
+ 
++/*
++ * Karkhana: the 9p server's state, present once the guest has mounted the
++ * export (9p.c). It rides in the device-specific state that virtio_load()
++ * reads, so a stream without it (an older snapshot) still loads.
++ */
++static bool virtio_9p_server_needed(void *opaque)
++{
++    V9fsVirtioState *v = opaque;
++
++    return v->state.proto_version != 0;
++}
++
++static const VMStateDescription vmstate_virtio_9p_server = {
++    .name = "virtio-9p-device/server",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .needed = virtio_9p_server_needed,
++    .fields = (VMStateField[]) {
++        VMSTATE_STRUCT(state, V9fsVirtioState, 1, vmstate_v9fs_server,
++                       V9fsState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static const VMStateDescription vmstate_virtio_9p_device = {
++    .name = "virtio-9p-device",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (VMStateField[]) {
++        VMSTATE_END_OF_LIST()
++    },
++    .subsections = (const VMStateDescription * []) {
++        &vmstate_virtio_9p_server,
++        NULL
++    },
++};
++
+ static const VMStateDescription vmstate_virtio_9p = {
+     .name = "virtio-9p",
+     .minimum_version_id = 1,
+@@ -262,6 +299,7 @@ static void virtio_9p_class_init(ObjectClass *klass, void *data)
+     vdc->get_features = virtio_9p_get_features;
+     vdc->get_config = virtio_9p_get_config;
+     vdc->reset = virtio_9p_reset;
++    vdc->vmsd = &vmstate_virtio_9p_device;
+ }
+ 
+ static const TypeInfo virtio_device_info = {
+EOF
+# Carried cherry-pick: ktock/qemu-wasm#50 by its author (open upstream).
+# Emscripten gives a thread a 64KB stack with no guard page, laid out above the
+# thread's own TLS; an overflow corrupts it silently, as the PR shows for the
+# block layer's synchronous paths. 2MB per thread, plus -sSTACK_SIZE=4MB for
+# main() under PROXY_TO_PTHREAD (the x86_64 EXTRA_CFLAGS below).
+COPY <<'EOF' /qemu-patches/thread-stack.patch
+diff --git a/util/qemu-thread-posix.c b/util/qemu-thread-posix.c
+index b2e26e21205b6..0064810858e9b 100644
+--- a/util/qemu-thread-posix.c
++++ b/util/qemu-thread-posix.c
+@@ -11,6 +11,12 @@
+  *
+  */
+ #include "qemu/osdep.h"
++#include "qemu/units.h"
++
++#if defined(EMSCRIPTEN)
++#define EMSCRIPTEN_THREAD_STACK_SIZE (2 * MiB)
++#endif
++
+ #include "qemu/thread.h"
+ #include "qemu/atomic.h"
+ #include "qemu/notify.h"
+@@ -560,6 +566,22 @@ void qemu_thread_create(QemuThread *thread, const char *name,
+         error_exit(err, __func__);
+     }
+ 
++#if defined(EMSCRIPTEN)
++    /*
++     * Emscripten gives a new thread a 64KB wasm shadow stack by default, laid
++     * out directly above the thread's own TLS block with no guard page.  The
++     * synchronous block-layer paths device emulation takes from a vCPU
++     * thread (blk_pread under AIO_WAIT_WHILE: aio_poll, bottom halves,
++     * coroutine entry) need a few hundred KB, and an overflow silently
++     * corrupts the TLS.  Linear memory is committed, not reserved, so keep
++     * the request moderate.
++     */
++    err = pthread_attr_setstacksize(&attr, EMSCRIPTEN_THREAD_STACK_SIZE);
++    if (err) {
++        error_exit(err, __func__);
++    }
++#endif
++
+     if (mode == QEMU_THREAD_DETACHED) {
+         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+     }
+EOF
+RUN cd /qemu && git apply /qemu-patches/thread-stack.patch && \
+    grep -q 'EMSCRIPTEN_THREAD_STACK_SIZE' util/qemu-thread-posix.c
+RUN cd /qemu && git apply /qemu-patches/9p-migrate.patch && \
+    test "$(grep -c 'vmstate_v9fs_server' hw/9pfs/9p.c hw/9pfs/virtio-9p-device.c | awk -F: '{s+=$2} END {print s}')" -ge 3 && \
+    ! grep -q 'Migration is disabled when VirtFS' hw/9pfs/9p.c
 FROM scratch AS qemu-repo
 COPY --link --from=qemu-repo-base /qemu /
 
@@ -937,6 +1246,14 @@ RUN sed -i 's/"-nographic",/"-object", "rng-builtin,id=rng0", "-device", "virtio
 # page supplies the user's OPFS disk or an in-memory template copy.
 RUN test "$(grep -c '"-drive", "if=virtio,format=raw,file=/pack/rootfs.bin",' /args.json.template)" -eq 1 && \
     sed -i 's|"-drive", "if=virtio,format=raw,file=/pack/rootfs.bin",|&\n    "-drive", "if=virtio,format=qcow2,file=/kdisk/disk.qcow2,werror=report,rerror=report",|' /args.json.template
+# The rootfs is read-only (squashfs, mounted ro), and saying so lets savevm run:
+# savevm refuses a writable disk that cannot hold snapshots. Karkhana saves a
+# running machine with savevm into /kdisk/disk.qcow2, on QEMU's main loop
+# thread. `migrate` would do the block-layer work on a migration thread, and a
+# coroutine resumed on another thread crashes under Emscripten's Asyncify
+# fibers ("func is not a function" in Asyncify.doRewind).
+RUN sed -i 's|"-drive", "if=virtio,format=raw,file=/pack/rootfs.bin",|"-drive", "if=virtio,format=raw,file=/pack/rootfs.bin,readonly=on",|' /args.json.template && \
+    test "$(grep -c 'rootfs.bin,readonly=on' /args.json.template)" -eq 1
 RUN MIGRATION_FLAGS= ; \
     if test "${QEMU_MIGRATION}" = "true"  ; then \
       MIGRATION_FLAGS='"-incoming", "file:/pack/vm.state",' ; \
@@ -1086,7 +1403,7 @@ for old, new in patches.items():
     s = s.replace(old, new)
 p.write_text(s)
 PY
-RUN EXTRA_CFLAGS="-O3 -g -Wno-error=unused-command-line-argument -Wno-error=unused-but-set-variable -matomics -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -pthread -sPROXY_TO_PTHREAD=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sTOTAL_MEMORY=$((3000*1024*1024)) -sWASM_BIGINT -sMALLOC=emmalloc -sEXPORT_ES6=1 -sASYNCIFY_IMPORTS=ffi_call_js $XTERM_PTY_CFLAGS " ; \
+RUN EXTRA_CFLAGS="-O3 -g -Wno-error=unused-command-line-argument -Wno-error=unused-but-set-variable -matomics -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -pthread -sPROXY_TO_PTHREAD=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sTOTAL_MEMORY=$((3000*1024*1024)) -sSTACK_SIZE=4MB -sWASM_BIGINT -sMALLOC=emmalloc -sEXPORT_ES6=1 -sASYNCIFY_IMPORTS=ffi_call_js $XTERM_PTY_CFLAGS " ; \
     emconfigure ../configure --static --target-list=x86_64-softmmu --cpu=wasm32 --cross-prefix= \
     --without-default-features --enable-system --with-coroutine=fiber --enable-virtfs \
     --extra-cflags="$EXTRA_CFLAGS" --extra-cxxflags="$EXTRA_CFLAGS" --extra-ldflags="-sEXPORTED_RUNTIME_METHODS=addFunction,removeFunction,TTY,FS" && \

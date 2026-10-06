@@ -411,6 +411,44 @@ The init still prints `karkhana disk: persistent` when it mounts the disk, in a
 scratch tab too. The header badge shows the real mode; the next engine build
 corrects the message.
 
+### Machine files: moving a running machine
+
+"Save this machine to a file" (`karkhana.machine.save()`) captures the running
+VM. The page switches the console to QEMU's monitor (Ctrl-A c) and hides it from
+the terminal. It runs `stop`, then `savevm`, which writes the RAM and device state
+into the guest disk as a qcow2 internal snapshot. It copies the disk in that pause,
+runs `delvm`, then `cont`. `disk/machine-file.js` writes one gzip stream: a header
+(engine id, snapshot name) and the disk image. The page downloads it.
+
+"Open a machine file…" (`karkhana.machine.open(file)`) copies the file into OPFS
+and reloads into `?disk=fork&machine=<id>`. The page boots the image as a scratch
+disk with `-loadvm` in place of `-incoming`, sends Ctrl-L until the shell redraws,
+then deletes the snapshot. Processes, shell variables and open terminals resume
+where they were; "keep this machine" makes it the saved disk.
+
+Two engine changes make this work, both in `Dockerfile.builder`:
+- **A 9p patch.** Upstream QEMU refuses to save a guest with 9p exports mounted,
+  and Karkhana keeps `/persist` and the TLS certificate mounted. The patch saves the
+  9p server's fid table with the device and reopens files on first use after a restore.
+- **`savevm`, not `migrate`.** `migrate` does block-layer work on a migration
+  thread, and Emscripten's Asyncify fibers cannot resume a coroutine on another
+  thread. The save thread crashed ("func is not a function" in `Asyncify.doRewind`),
+  and QEMU hung joining it. `savevm` runs on the main loop thread. It needs the
+  rootfs drive marked `readonly=on`, because it refuses writable disks that cannot
+  hold snapshots.
+
+A save while a 9p request is in flight fails, and the page tries again. Limits:
+- The file only resumes on the engine that wrote it (`ENGINE_ID`).
+- Files the guest created under `/persist` stay behind: that directory is page memory.
+- The guest clock keeps the time of the save until something sets it.
+- Network connections open at the save are lost.
+- A persistent disk keeps the space the snapshot used: qcow2 reuses it but does not shrink.
+
+`node qemu-build/test-machine-file.mjs` checks the file format on the host.
+`node qemu-build/test-teleport.mjs` saves a machine in one headless Chrome and
+resumes it in a second with its own profile, checking a shell variable, a
+running process and the disk.
+
 ### Folder backups (the storage ladder's second rung)
 
 The OPFS disk stays the live copy; only OPFS gives QEMU synchronous I/O. A folder

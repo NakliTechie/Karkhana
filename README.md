@@ -22,7 +22,7 @@ The first visit downloads about 280 MiB of engine assets. The browser caches the
 | **Languages** | Python 3.11.2, Node 22.23.3, sqlite3, git, curl |
 | **Python packages** | `kpip <pkg>` — `uv` tuned for the in-page network path. Plain `pip` stalls against the proxy; `uv` does not |
 | **Node packages** | `npm install -g` works against the real registry |
-| **Persistence** | Writes land on a 16 GiB disk in this browser's origin-private storage (OPFS), so installs and files survive closing the tab. A new disk costs about 6.4 MiB and grows as used. ⚙ → Disk keeps a backup in a folder you pick and restores from it. A second tab, or `?disk=scratch`, runs on a scratch disk in page memory that the tab discards; ⚙ → Disk → "keep this machine" makes it the saved disk without a reboot. "Fork this machine" opens a scratch tab that starts from a copy of this one; keep the fork that worked |
+| **Persistence** | Writes land on a 16 GiB disk in this browser's origin-private storage (OPFS), so installs and files survive closing the tab. A new disk costs about 6.4 MiB and grows as used. ⚙ → Disk keeps a backup in a folder you pick and restores from it. A second tab, or `?disk=scratch`, runs on a scratch disk in page memory that the tab discards; ⚙ → Disk → "keep this machine" makes it the saved disk without a reboot. "Fork this machine" opens a scratch tab that starts from a copy of this one; keep the fork that worked. "Save this machine to a file" captures it running, disk and RAM; open the file in Karkhana on another device and it resumes mid-command |
 | **Agent** | `/usr/bin/agent "task"` — an OpenAI-protocol tool loop with `run_command` / `read_file` / `write_file` / `list_directory`. Pick a provider under ⚙ (Ferrule, Ollama, OpenRouter, Anthropic, …). aider, OpenCode, Claude Code and the SDKs reach it through the standard `OPENAI_*`/`ANTHROPIC_*` variables with a placeholder key; the real key never enters the VM. With Ferrule, provider keys stay in Ferrule and the browser holds only a revocable token |
 
 Bun 1.4.2 executes JavaScript, cryptographic checks, and subprocesses on the x86-64-v2 guest CPU.
@@ -86,6 +86,8 @@ karkhana.disk                          // { mode, reason, created, persisted, st
 karkhana.disk.forget()                 // delete the disk; the reload starts a fresh one
 karkhana.disk.keep()                   // scratch tab: become the saved disk, no reboot
 karkhana.disk.fork()                   // copy this machine for a new scratch tab; resolves to its URL
+karkhana.machine.save()                // the running machine, disk and RAM, as a File
+karkhana.machine.open(file)            // resume a saved machine in this tab (reloads)
 karkhana.disk.backup.attach(dirHandle)  // back up to a folder; also now(), restore(dir), status
 karkhana.persist.pull()                // mirror a ksave archive to OPFS now
 karkhana.persist.forget()              // drop saved state
