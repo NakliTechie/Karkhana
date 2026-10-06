@@ -879,11 +879,12 @@
               nudge();
             })();
           }
-          // Third-party agents (aider, OpenCode, Claude Code, the OpenAI and Anthropic
+          // Third-party agents (aider, OpenCode, dsh, the OpenAI and Anthropic
           // SDKs) find the bridge through the standard variables. The key is a
           // placeholder: the SW swaps in the real one for this host only.
           for (const line of ['OPENAI_BASE_URL=http://api.karkhana.internal/v1', 'OPENAI_API_BASE=http://api.karkhana.internal/v1',
-            'OPENAI_API_KEY=karkhana-bridge', 'ANTHROPIC_BASE_URL=http://api.karkhana.internal', 'ANTHROPIC_API_KEY=karkhana-bridge'])
+            'OPENAI_API_KEY=karkhana-bridge', 'ANTHROPIC_BASE_URL=http://api.karkhana.internal', 'ANTHROPIC_API_KEY=karkhana-bridge',
+            'DEEPSEEK_BASE_URL=http://api.karkhana.internal', 'DEEPSEEK_API_KEY=karkhana-bridge'])
             info += 'env: ' + line + '\n';
           // The init prints the mode; the disk is mounted the same way in both.
           info += 'disk: vdb\ndisk-mode: ' + (disk ? 'persistent' : 'scratch') + '\n';
